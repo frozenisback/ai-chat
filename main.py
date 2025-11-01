@@ -3,21 +3,21 @@
 Single-file Flask app:
 
 - Serves a modern chat UI
-- Proxies chat to Heroku Inference (INFERENCE_URL, INFERENCE_KEY)
-- Runs code snippets in an isolated temp dir with resource limits
-- Offers an "auto-fix" path: send code + logs to the model and get a suggested fix
-
-Usage:
-    export INFERENCE_URL="https://..."
-    export INFERENCE_KEY="sk-..."
-    python app.py
+- Proxies chat to Heroku Inference (INFERENCE_URL, INFERENCE_KEY, INFERENCE_MODEL_ID)
+- Tries multiple Heroku inference endpoint shapes to avoid 404s:
+    1) /v1/chat/completions (OpenAI-compatible chat)
+    2) /v1/models/{model_id}/invoke
+    3) {INFERENCE_URL}/invoke
+    4) direct POST to INFERENCE_URL with {"input": ...}
+- Runs code snippets in an isolated temp dir with resource limits (POSIX)
+- Offers an "auto-fix" endpoint that sends the failing code + error to the AI and returns suggested fixed code
 
 WARNING:
     This app executes user-provided code on the host. Only run it locally or
     inside a VM/container for trusted use.
 """
-from flask import Flask, render_template_string, request, jsonify, send_from_directory
-import os, requests, tempfile, subprocess, shutil, uuid, re, json, sys, time
+from flask import Flask, render_template_string, request, jsonify
+import os, requests, tempfile, subprocess, shutil, re, json, sys
 
 # Optional resource limits (POSIX)
 try:
@@ -28,48 +28,146 @@ except Exception:
 
 INFERENCE_URL = os.environ.get("INFERENCE_URL")
 INFERENCE_KEY = os.environ.get("INFERENCE_KEY")
-
-if not INFERENCE_URL or not INFERENCE_KEY:
-    print("ERROR: Please set INFERENCE_URL and INFERENCE_KEY environment variables.", file=sys.stderr)
-    # We'll continue so user can read the UI, but chat will fail until vars are set.
+INFERENCE_MODEL_ID = os.environ.get("INFERENCE_MODEL_ID")
 
 app = Flask(__name__, static_folder="static", template_folder="templates")
 
 # -----------------------
-# Helper: call AI model
+# Helper: robust AI call
 # -----------------------
+def _post_json(url, headers, payload, timeout=30):
+    """Helper wrapper for POST with exception handling."""
+    try:
+        r = requests.post(url, headers=headers, json=payload, timeout=timeout)
+        return r
+    except Exception as e:
+        return {"exception": str(e)}
+
 def call_ai(prompt: str, timeout: int = 30):
     """
-    Calls the Heroku inference endpoint.
-    Expects the inference service to accept {"input": "<prompt>"} and return JSON containing "output".
-    Falls back to whole response text when JSON missing.
+    Robust call to Heroku Inference endpoints.
+    Tries multiple endpoint shapes and parses likely response formats.
+    Returns dict: {"ok": True, "text": "..."} or {"error": "..."}
     """
     if not INFERENCE_URL or not INFERENCE_KEY:
         return {"error": "INFERENCE_URL or INFERENCE_KEY not configured on server."}
 
+    base = INFERENCE_URL.rstrip("/")
     headers = {
         "Authorization": f"Bearer {INFERENCE_KEY}",
         "Content-Type": "application/json"
     }
-    payload = {"input": prompt}
 
+    # 1) Try OpenAI-compatible chat completions
     try:
-        r = requests.post(INFERENCE_URL, headers=headers, json=payload, timeout=timeout)
+        chat_url = f"{base}/v1/chat/completions"
+        payload = {"model": INFERENCE_MODEL_ID, "messages": [{"role":"user","content": prompt}]}
+        r = _post_json(chat_url, headers, payload, timeout=timeout)
+        if isinstance(r, requests.Response):
+            if r.status_code == 200:
+                try:
+                    jr = r.json()
+                    # Common shapes: jr['choices'][0]['message']['content'] or jr['output'] etc.
+                    if isinstance(jr, dict):
+                        # Try OpenAI-style choices
+                        if "choices" in jr and isinstance(jr["choices"], list) and len(jr["choices"])>0:
+                            ch = jr["choices"][0]
+                            # message.content
+                            msg = ch.get("message") or {}
+                            content = msg.get("content") if isinstance(msg, dict) else None
+                            if content:
+                                return {"ok": True, "text": content}
+                            # text or delta fallback
+                            text = ch.get("text") or ch.get("message") or None
+                            if isinstance(text, str):
+                                return {"ok": True, "text": text}
+                        # Heroku may respond with 'output'
+                        if "output" in jr:
+                            out = jr["output"]
+                            if isinstance(out, str):
+                                return {"ok": True, "text": out}
+                            # sometimes output is dict
+                            if isinstance(out, dict):
+                                return {"ok": True, "text": out.get("text", str(out))}
+                        # 'result' or 'data' fallback
+                        if "result" in jr:
+                            return {"ok": True, "text": jr["result"]}
+                        if "data" in jr:
+                            return {"ok": True, "text": jr["data"]}
+                    # fallback to raw text
+                    return {"ok": True, "text": r.text}
+                except Exception as e:
+                    return {"error": f"parsing chat response failed: {e} | status={r.status_code} body={getattr(r,'text',str(r))[:400]}"}
+            else:
+                # non-200 try next
+                pass
+        else:
+            # network error returned
+            return {"error": f"network error calling {chat_url}: {r.get('exception')}"}
     except Exception as e:
-        return {"error": f"Failed to call inference endpoint: {e}"}
+        # continue to next option
+        pass
 
-    # Try JSON
+    # 2) Try model invoke: /v1/models/{id}/invoke
     try:
-        jr = r.json()
-        # common field name used earlier: "output"
-        if isinstance(jr, dict) and ("output" in jr):
-            return {"ok": True, "raw": jr, "text": jr.get("output")}
-        # if the model returns top-level text or other keys, try to extract any string
-        # fallback: stringify
-        return {"ok": True, "raw": jr, "text": json.dumps(jr)}
+        invoke_url = f"{base}/v1/models/{INFERENCE_MODEL_ID}/invoke"
+        payload = {"input": prompt}
+        r = _post_json(invoke_url, headers, payload, timeout=timeout)
+        if isinstance(r, requests.Response):
+            if r.status_code == 200:
+                try:
+                    jr = r.json()
+                    # Many Heroku model cards return {'output': "..."} or other shapes
+                    if isinstance(jr, dict):
+                        if "output" in jr:
+                            return {"ok": True, "text": jr.get("output")}
+                        if "result" in jr:
+                            return {"ok": True, "text": jr.get("result")}
+                        # fallback to any string value
+                        for k in ("text","response","data"):
+                            if k in jr and isinstance(jr[k], str):
+                                return {"ok": True, "text": jr[k]}
+                    return {"ok": True, "text": r.text}
+                except Exception as e:
+                    return {"error": f"parsing invoke response failed: {e} | status={r.status_code} body={getattr(r,'text',str(r))[:400]}"}
+        else:
+            return {"error": f"network error calling {invoke_url}: {r.get('exception')}"}
     except Exception:
-        # fallback to raw text
-        return {"ok": True, "raw": r.text, "text": r.text}
+        pass
+
+    # 3) Try base /invoke
+    try:
+        base_invoke = f"{base}/invoke"
+        payload = {"input": prompt}
+        r = _post_json(base_invoke, headers, payload, timeout=timeout)
+        if isinstance(r, requests.Response) and r.status_code == 200:
+            try:
+                jr = r.json()
+                if isinstance(jr, dict) and "output" in jr:
+                    return {"ok": True, "text": jr.get("output")}
+                return {"ok": True, "text": r.text}
+            except Exception:
+                return {"ok": True, "text": r.text}
+    except Exception:
+        pass
+
+    # 4) Last resort: POST to base url with {"input":...}
+    try:
+        r = _post_json(base, headers, {"input": prompt}, timeout=timeout)
+        if isinstance(r, requests.Response) and r.status_code == 200:
+            try:
+                jr = r.json()
+                if isinstance(jr, dict) and "output" in jr:
+                    return {"ok": True, "text": jr.get("output")}
+                return {"ok": True, "text": r.text}
+            except Exception:
+                return {"ok": True, "text": r.text}
+        elif isinstance(r, dict) and r.get("exception"):
+            return {"error": f"network error: {r.get('exception')}"}
+        else:
+            return {"error": f"All attempts failed. Last status: {getattr(r,'status_code', None)} body: {getattr(r,'text',str(r))[:400]}"}
+    except Exception as e:
+        return {"error": f"final fallback failed: {e}"}
 
 # -----------------------
 # Helper: extract code blocks
@@ -81,12 +179,11 @@ def extract_first_code_block(text: str):
     Returns tuple(language, code) for the first triple-backtick block found.
     If none found, returns (None, text)
     """
-    m = CODE_FENCE_RE.search(text)
+    m = CODE_FENCE_RE.search(text or "")
     if m:
         lang = m.group(1) or None
         code = m.group(2)
         return lang, code
-    # also accept plain code if no fences
     return None, text
 
 # -----------------------
@@ -146,8 +243,6 @@ def run_code(language: str, code: str, timeout_seconds: int = 10):
         else:
             return {"success": False, "error": f"Unsupported language: {language}"}
 
-        # run subprocess
-        # use cwd=tmpdir to avoid file system escapes
         proc = subprocess.run(
             cmd,
             cwd=tmpdir,
@@ -170,14 +265,13 @@ def run_code(language: str, code: str, timeout_seconds: int = 10):
     except Exception as e:
         return {"success": False, "error": f"Execution error: {e}"}
     finally:
-        # cleanup
         try:
             shutil.rmtree(tmpdir)
         except Exception:
             pass
 
 # -----------------------
-# Flask routes
+# Flask routes (UI same as before)
 # -----------------------
 
 INDEX_HTML = """
@@ -305,7 +399,6 @@ INDEX_HTML = """
     d.innerHTML = html;
     messagesEl.appendChild(d);
     messagesEl.scrollTop = messagesEl.scrollHeight;
-    // clickable code blocks: load into editor
     d.querySelectorAll && d.querySelectorAll("code").forEach(block=>{
       block.style.cursor = "pointer";
       block.addEventListener("click", ()=> {
@@ -313,7 +406,6 @@ INDEX_HTML = """
         log("Loaded code snippet into editor.");
       })
     });
-    // run highlight
     document.querySelectorAll('pre code').forEach((el) => { hljs.highlightElement(el); });
   }
 
@@ -342,7 +434,6 @@ INDEX_HTML = """
         appendMsg("bot", `<strong>AI Error:</strong> ${escapeHtml(j.error)}`);
         log("AI error: " + j.error);
       } else {
-        // AI reply may contain code fences; render safe
         let pretty = formatReply(j.reply || j.text || "");
         appendMsg("bot", pretty);
         log("AI replied.");
@@ -353,11 +444,9 @@ INDEX_HTML = """
     }
   }
 
-  // auto-fix: send last error + code to server, load suggested code
   fixBtn.onclick = async ()=>{
     const code = codeArea.value;
     if(!code) { log("No code in editor to fix."); return; }
-    const lastErr = (logArea.innerText || "").split("\\n").reverse().find(l => l.includes("Traceback") || l.includes("Error") || l.includes("Exception"));
     const payload = { code, language: document.getElementById("lang").value, logs: logArea.innerText };
     appendMsg("user", `<strong>You:</strong> Auto-fix request`);
     log("Sending auto-fix request to AI...");
@@ -370,7 +459,6 @@ INDEX_HTML = """
       } else {
         const suggested = j.suggested || j.reply || "";
         appendMsg("bot", formatReply(suggested));
-        // auto-load if code block found
         const codeOnly = j.code || "";
         if(codeOnly) {
           codeArea.value = codeOnly;
@@ -383,7 +471,6 @@ INDEX_HTML = """
     }
   };
 
-  // run code
   runBtn.onclick = async ()=>{
     const language = document.getElementById("lang").value;
     const code = codeArea.value;
@@ -407,17 +494,13 @@ INDEX_HTML = """
 
   clearBtn.onclick = ()=>{ codeArea.value = ""; logArea.innerText = ""; log("Cleared editor and logs."); };
 
-  // utilities
   function escapeHtml(s){ return s.replaceAll('&','&amp;').replaceAll('<','&lt;').replaceAll('>','&gt;'); }
 
   function formatReply(text) {
-    // convert triple-backtick blocks to highlighted <pre><code> blocks
     if(!text) return "";
-    // naive code fence replacement
     const parts = text.split(/(```[\\s\\S]*?```)/g);
     return parts.map(p=>{
       if(p.startsWith("```")) {
-        // strip fences
         p = p.replace(/^```[\\w+\\-]*\\n?/, '').replace(/```$/, '');
         return `<pre><code>${escapeHtml(p)}</code></pre>`;
       } else {
@@ -436,17 +519,12 @@ def index():
 
 @app.route("/_model")
 def modelinfo():
-    # return model id if available from INFERENCE_URL or from env
-    model = os.environ.get("INFERENCE_MODEL_ID") or os.environ.get("MODEL") or ""
+    model = INFERENCE_MODEL_ID or ""
     return jsonify({"model": model})
 
-# Chat proxy
+# Chat proxy (uses call_ai)
 @app.route("/chat", methods=["POST"])
 def chat_proxy():
-    """
-    Accepts JSON: { "message": "<user text>" }
-    Forwards to the inference endpoint and returns { reply: "<ai text>" }
-    """
     data = request.get_json(force=True)
     user_msg = data.get("message", "")
     if not user_msg:
@@ -459,37 +537,26 @@ def chat_proxy():
         "Respond succinctly but clearly."
     )
 
-    r = call_ai(prompt)
+    r = call_ai(prompt, timeout=30)
     if "error" in r:
         return jsonify({"error": r["error"]}), 500
-    # return model text
     reply = r.get("text") or ""
     return jsonify({"reply": reply})
 
 # Run code
 @app.route("/run", methods=["POST"])
 def run_endpoint():
-    """
-    Accepts JSON: { language: "python"|"javascript"|"bash", code: "..." }
-    Returns execution result.
-    """
     data = request.get_json(force=True)
     language = data.get("language", "python")
     code = data.get("code", "")
     if not code:
         return jsonify({"error": "No code provided"}), 400
-
     res = run_code(language, code, timeout_seconds=10)
     return jsonify(res)
 
-# Auto-fix endpoint: send code + logs to model and ask for corrected code
+# Auto-fix endpoint
 @app.route("/autofix", methods=["POST"])
 def autofix_endpoint():
-    """
-    Accepts JSON: { language, code, logs }
-    Sends a structured prompt to the AI asking for corrected code.
-    Returns { suggested: <raw reply>, code: <first code block found> }
-    """
     data = request.get_json(force=True)
     code = data.get("code", "")
     logs = data.get("logs", "")
@@ -514,20 +581,14 @@ def autofix_endpoint():
 
     text = r.get("text", "")
     lang_found, code_block = extract_first_code_block(text)
-    # prefer code block; otherwise return raw text
     return jsonify({"suggested": text, "code": code_block or "", "lang": lang_found})
 
-# Serve favicon or static if needed (placeholder)
 @app.route("/favicon.ico")
 def favicon():
     return "", 204
 
-# -----------------------
-# Run app
-# -----------------------
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
     debug = os.environ.get("FLASK_DEBUG", "0") == "1"
     print(f"Starting app on 0.0.0.0:{port} debug={debug}")
-    # For single-file local usage, this is fine. For production, use gunicorn/uvicorn.
     app.run(host="0.0.0.0", port=port, debug=debug)
