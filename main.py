@@ -266,36 +266,36 @@ INDEX_HTML = """
       --bubble-bot:linear-gradient(180deg,#071829,#072a3a);
     }
     *{box-sizing:border-box}
-    html,body{height:100%;margin:0;font-family:Inter,system-ui,-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;font-weight:500;}
+    html,body{height:100%;margin:0;font-family:Inter,system-ui,-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;font-weight:500;font-size:16px;}
     body{background:linear-gradient(180deg,#041322 0%, #06182a 100%); color:#e6eef8; display:flex; align-items:center; justify-content:center; padding:10px;}
-    .app{width:100%;max-width:1400px;background:var(--card);border-radius:14px;box-shadow:0 10px 40px rgba(2,6,23,0.6);overflow:hidden;border:1px solid rgba(255,255,255,0.03); display:flex; flex-direction:column; height:95vh;}
+    .app{width:100%;max-width:1200px;background:var(--card);border-radius:14px;box-shadow:0 10px 40px rgba(2,6,23,0.6);overflow:hidden;border:1px solid rgba(255,255,255,0.03); display:flex; flex-direction:column; height:90vh;margin:0 auto;}
     header{display:flex;align-items:center;justify-content:space-between;padding:18px 22px;border-bottom:1px solid rgba(255,255,255,0.02); flex-shrink:0;}
     header .title{display:flex;gap:12px;align-items:center}
     .logo{width:44px;height:44px;border-radius:10px;background:linear-gradient(135deg,#7c3aed,#06b6d4);display:flex;align-items:center;justify-content:center;font-weight:700}
-    header h1{font-size:16px;margin:0;font-weight:600}
-    header .meta{color:var(--muted);font-size:13px}
+    header h1{font-size:18px;margin:0;font-weight:600}
+    header .meta{color:var(--muted);font-size:14px}
     .wrap{display:flex;gap:20px;padding:22px; flex:1; overflow:hidden;}
     .chat{flex:1;display:flex;flex-direction:column;min-width:0;}
     .messages{flex:1;overflow:auto;padding:18px;display:flex;flex-direction:column;gap:12px;}
-    .msg{max-width:82%;padding:12px 14px;border-radius:12px;word-break:break-word}
+    .msg{max-width:82%;padding:12px 14px;border-radius:12px;word-break:break-word;font-size:16px;}
     .msg.user{margin-left:auto;background:var(--bubble-user);border:1px solid rgba(255,255,255,0.03)}
     .msg.bot{margin-right:auto;background:var(--bubble-bot);border:1px solid rgba(255,255,255,0.02)}
-    .meta-small{font-size:12px;color:var(--muted);margin-top:6px}
+    .meta-small{font-size:13px;color:var(--muted);margin-top:6px}
     .input-row{display:flex;gap:8px;padding:12px;align-items:center;border-top:1px solid rgba(255,255,255,0.02);background:linear-gradient(180deg, rgba(255,255,255,0.01), transparent); flex-shrink:0;}
-    .input{flex:1;padding:12px;border-radius:10px;border:1px solid rgba(255,255,255,0.03);background:transparent;color:inherit;font-size:14px;}
-    button.primary{background:var(--accent);border:none;padding:10px 14px;border-radius:10px;color:white;cursor:pointer;font-weight:600;}
+    .input{flex:1;padding:12px;border-radius:10px;border:1px solid rgba(255,255,255,0.03);background:transparent;color:inherit;font-size:16px;}
+    button.primary{background:var(--accent);border:none;padding:10px 14px;border-radius:10px;color:white;cursor:pointer;font-weight:600;font-size:16px;}
     button.ghost{background:transparent;border:1px solid rgba(255,255,255,0.04);padding:9px 12px;border-radius:10px;color:var(--muted);cursor:pointer;}
     /* right panel */
     .panel{width:280px;border-left:1px solid rgba(255,255,255,0.02);padding-left:18px;display:flex;flex-direction:column;gap:12px; flex-shrink:0;}
     .panel .card{background:transparent;border-radius:8px;padding:10px;border:1px solid rgba(255,255,255,0.02);}
-    .small{font-size:13px;color:var(--muted);}
+    .small{font-size:14px;color:var(--muted);}
     /* code blocks */
-    pre{background:#0b1220;padding:12px;border-radius:8px;overflow:auto;border:1px solid rgba(255,255,255,0.02);white-space:pre-wrap;}
+    pre{background:#0b1220;padding:12px;border-radius:8px;overflow:auto;border:1px solid rgba(255,255,255,0.02);white-space:pre-wrap;font-size:15px;}
     .code-wrap{position:relative;}
     .copy-btn{position:absolute;right:8px;top:8px;background:rgba(255,255,255,0.04);border-radius:6px;padding:6px 8px;border:0;color:#cfe9ff;cursor:pointer;font-size:12px;}
     .streaming-cursor{display:inline-block;width:6px;height:12px;background:rgba(255,255,255,0.8);margin-left:6px;vertical-align:middle;border-radius:2px;animation: blink 1s linear infinite;}
     @keyframes blink{0%{opacity:1}50%{opacity:0.15}100%{opacity:1}}
-    .stamp{font-size:12px;color:var(--muted);margin-top:6px;}
+    .stamp{font-size:13px;color:var(--muted);margin-top:6px;}
     
     /* Responsive design */
     @media (max-width: 1024px) {
@@ -307,19 +307,19 @@ INDEX_HTML = """
       body { padding: 5px; }
       .app { height: 98vh; border-radius: 8px; }
       header { padding: 12px 15px; }
-      header h1 { font-size: 14px; }
+      header h1 { font-size: 16px; }
       .wrap { padding: 15px; gap: 15px; }
       .messages { padding: 10px; }
       .input-row { padding: 10px; }
-      .msg { max-width: 95%; padding: 10px 12px; }
-      button.primary, button.ghost { padding: 8px 12px; font-size: 14px; }
+      .msg { max-width: 95%; padding: 10px 12px; font-size: 15px; }
+      button.primary, button.ghost { padding: 8px 12px; font-size: 15px; }
     }
     
     @media (max-width: 480px) {
       header .title { gap: 8px; }
       .logo { width: 36px; height: 36px; font-size: 14px; }
-      header h1 { font-size: 12px; }
-      header .meta { font-size: 11px; }
+      header h1 { font-size: 14px; }
+      header .meta { font-size: 12px; }
       .wrap { padding: 10px; gap: 10px; }
       .messages { padding: 8px; gap: 8px; }
       .input-row { padding: 8px; gap: 5px; }
@@ -463,6 +463,21 @@ INDEX_HTML = """
         
         // Handle inline code
         processedLine = processedLine.replace(/`([^`]+)`/g, '<code>$1</code>');
+        
+        // Handle headers (# ## ### etc.)
+        processedLine = processedLine.replace(/^(#{1,6})\\s+(.+)$/gm, (match, hashes, content) => {
+          const level = hashes.length;
+          return `<h${level} style="margin: 10px 0; font-weight: 600;">${content}</h${level}>`;
+        });
+        
+        // Handle bold text (**text**)
+        processedLine = processedLine.replace(/\\*\\*([^*]+)\\*\\*/g, '<strong>$1</strong>');
+        
+        // Handle italic text (*text*)
+        processedLine = processedLine.replace(/\\*([^*]+)\\*/g, '<em>$1</em>');
+        
+        // Handle lists (- item)
+        processedLine = processedLine.replace(/^-\\s+(.+)$/gm, '<li style="margin: 5px 0;">$1</li>');
         
         // Add the processed line
         result += processedLine + (i < lines.length - 1 ? '<br>' : '');
