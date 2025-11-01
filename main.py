@@ -9,7 +9,7 @@ Save as main.py and run as usual. Keep in mind conversation memory is in-memory 
 """
 
 from flask import Flask, request, render_template_string, jsonify, make_response, Response, stream_with_context
-import os, requests, json, re, uuid, time, threading
+import os, requests, json, re, uuid, time, threading, html
 
 # ---------- Config ----------
 INFERENCE_URL = os.environ.get("INFERENCE_URL")
@@ -182,53 +182,63 @@ def stream_ai_generator(sid, user_message, timeout=60):
         payload = {"model": INFERENCE_MODEL_ID, "messages": build_openai_messages(sid, user_message), "stream": True}
         r = post_json(chat_url, headers, payload, timeout=timeout, stream=True)
         if isinstance(r, requests.Response) and r.status_code == 200:
-            # r.iter_lines(decode_unicode=True) yields chunks delimited by newline
+            # Process SSE format
+            buffer = ""
             for line in r.iter_lines(decode_unicode=True):
                 if not line:
                     continue
-                # OpenAI-style lines may be like: data: {"id":...} or data: [DONE]
-                raw = line.strip()
-                # Some servers include 'data: ' prefix
-                if raw.startswith("data:"):
-                    raw_payload = raw[len("data:"):].strip()
-                else:
-                    raw_payload = raw
-                if raw_payload == "[DONE]":
-                    break
-                # try parse json
-                try:
-                    js = json.loads(raw_payload)
-                    # OpenAI-style: choices[0].delta.content
-                    if "choices" in js:
-                        ch = js["choices"][0]
-                        # delta
-                        delta = ch.get("delta", {})
-                        content = None
-                        if isinstance(delta, dict):
-                            content = delta.get("content")
-                        # fallback for other shapes
-                        if not content:
-                            # maybe choices[0].message.content
-                            msg = ch.get("message") or {}
-                            content = msg.get("content") if isinstance(msg, dict) else None
-                        if content:
-                            yield content
-                            continue
-                    # other shapes: maybe 'output' text
-                    if "output" in js:
-                        out = js["output"]
-                        if isinstance(out, str):
-                            yield out
-                        elif isinstance(out, list):
-                            yield " ".join(map(str, out))
-                        else:
-                            yield json.dumps(out)
+                    
+                # Handle SSE format with "event:message" prefix
+                if line.startswith("event:message"):
+                    # Extract the actual message content after "event:message"
+                    message_content = line[len("event:message"):].strip()
+                    
+                    # Skip empty messages
+                    if not message_content:
                         continue
-                    # fallback: string of json
-                    yield raw_payload
-                except Exception:
-                    # not json, just forward raw
-                    yield raw_payload
+                        
+                    # Check if it's a JSON message
+                    if message_content.startswith("{") and message_content.endswith("}"):
+                        try:
+                            js = json.loads(message_content)
+                            # OpenAI-style: choices[0].delta.content
+                            if "choices" in js:
+                                ch = js["choices"][0]
+                                # delta
+                                delta = ch.get("delta", {})
+                                content = None
+                                if isinstance(delta, dict):
+                                    content = delta.get("content")
+                                # fallback for other shapes
+                                if not content:
+                                    # maybe choices[0].message.content
+                                    msg = ch.get("message") or {}
+                                    content = msg.get("content") if isinstance(msg, dict) else None
+                                if content:
+                                    yield content
+                                    continue
+                            # other shapes: maybe 'output' text
+                            if "output" in js:
+                                out = js["output"]
+                                if isinstance(out, str):
+                                    yield out
+                                elif isinstance(out, list):
+                                    yield " ".join(map(str, out))
+                                else:
+                                    yield json.dumps(out)
+                                continue
+                        except json.JSONDecodeError:
+                            # Not valid JSON, treat as plain text
+                            pass
+                    
+                    # Handle special case for "done" message
+                    if message_content == "done":
+                        break
+                        
+                    # If not JSON or special case, yield as plain text
+                    # Sanitize the content to remove any potential HTML or script tags
+                    sanitized = html.escape(message_content)
+                    yield sanitized
             return
         # if non-200 or not a Response, fall through to non-stream
     except Exception:
@@ -258,35 +268,66 @@ INDEX_HTML = """
     }
     *{box-sizing:border-box}
     html,body{height:100%;margin:0;font-family:Inter,system-ui,-apple-system,Segoe UI,Roboto,Helvetica,Arial;}
-    body{background:linear-gradient(180deg,#041322 0%, #06182a 100%); color:#e6eef8; display:flex; align-items:center; justify-content:center; padding:30px;}
-    .app{width:100%;max-width:920px;background:var(--card);border-radius:14px;box-shadow:0 10px 40px rgba(2,6,23,0.6);overflow:hidden;border:1px solid rgba(255,255,255,0.03);}
-    header{display:flex;align-items:center;justify-content:space-between;padding:18px 22px;border-bottom:1px solid rgba(255,255,255,0.02)}
+    body{background:linear-gradient(180deg,#041322 0%, #06182a 100%); color:#e6eef8; display:flex; align-items:center; justify-content:center; padding:10px;}
+    .app{width:100%;max-width:1200px;background:var(--card);border-radius:14px;box-shadow:0 10px 40px rgba(2,6,23,0.6);overflow:hidden;border:1px solid rgba(255,255,255,0.03); display:flex; flex-direction:column; height:95vh;}
+    header{display:flex;align-items:center;justify-content:space-between;padding:18px 22px;border-bottom:1px solid rgba(255,255,255,0.02); flex-shrink:0;}
     header .title{display:flex;gap:12px;align-items:center}
     .logo{width:44px;height:44px;border-radius:10px;background:linear-gradient(135deg,#7c3aed,#06b6d4);display:flex;align-items:center;justify-content:center;font-weight:700}
     header h1{font-size:16px;margin:0}
     header .meta{color:var(--muted);font-size:13px}
-    .wrap{display:flex;gap:20px;padding:22px}
-    .chat{flex:1;display:flex;flex-direction:column;height:68vh}
-    .messages{flex:1;overflow:auto;padding:18px;display:flex;flex-direction:column;gap:12px}
+    .wrap{display:flex;gap:20px;padding:22px; flex:1; overflow:hidden;}
+    .chat{flex:1;display:flex;flex-direction:column;min-width:0;}
+    .messages{flex:1;overflow:auto;padding:18px;display:flex;flex-direction:column;gap:12px;}
     .msg{max-width:82%;padding:12px 14px;border-radius:12px;word-break:break-word}
     .msg.user{margin-left:auto;background:var(--bubble-user);border:1px solid rgba(255,255,255,0.03)}
     .msg.bot{margin-right:auto;background:var(--bubble-bot);border:1px solid rgba(255,255,255,0.02)}
     .meta-small{font-size:12px;color:var(--muted);margin-top:6px}
-    .input-row{display:flex;gap:8px;padding:12px;align-items:center;border-top:1px solid rgba(255,255,255,0.02);background:linear-gradient(180deg, rgba(255,255,255,0.01), transparent)}
-    .input{flex:1;padding:12px;border-radius:10px;border:1px solid rgba(255,255,255,0.03);background:transparent;color:inherit;font-size:14px}
-    button.primary{background:var(--accent);border:none;padding:10px 14px;border-radius:10px;color:white;cursor:pointer;font-weight:600}
-    button.ghost{background:transparent;border:1px solid rgba(255,255,255,0.04);padding:9px 12px;border-radius:10px;color:var(--muted);cursor:pointer}
+    .input-row{display:flex;gap:8px;padding:12px;align-items:center;border-top:1px solid rgba(255,255,255,0.02);background:linear-gradient(180deg, rgba(255,255,255,0.01), transparent); flex-shrink:0;}
+    .input{flex:1;padding:12px;border-radius:10px;border:1px solid rgba(255,255,255,0.03);background:transparent;color:inherit;font-size:14px;}
+    button.primary{background:var(--accent);border:none;padding:10px 14px;border-radius:10px;color:white;cursor:pointer;font-weight:600;}
+    button.ghost{background:transparent;border:1px solid rgba(255,255,255,0.04);padding:9px 12px;border-radius:10px;color:var(--muted);cursor:pointer;}
     /* right panel */
-    .panel{width:320px;border-left:1px solid rgba(255,255,255,0.02);padding-left:18px;display:flex;flex-direction:column;gap:12px}
-    .panel .card{background:transparent;border-radius:8px;padding:10px;border:1px solid rgba(255,255,255,0.02)}
-    .small{font-size:13px;color:var(--muted)}
+    .panel{width:320px;border-left:1px solid rgba(255,255,255,0.02);padding-left:18px;display:flex;flex-direction:column;gap:12px; flex-shrink:0;}
+    .panel .card{background:transparent;border-radius:8px;padding:10px;border:1px solid rgba(255,255,255,0.02);}
+    .small{font-size:13px;color:var(--muted);}
     /* code blocks */
-    pre{background:#0b1220;padding:12px;border-radius:8px;overflow:auto;border:1px solid rgba(255,255,255,0.02)}
-    .code-wrap{position:relative}
-    .copy-btn{position:absolute;right:8px;top:8px;background:rgba(255,255,255,0.04);border-radius:6px;padding:6px 8px;border:0;color:#cfe9ff;cursor:pointer;font-size:12px}
-    .streaming-cursor{display:inline-block;width:6px;height:12px;background:rgba(255,255,255,0.8);margin-left:6px;vertical-align:middle;border-radius:2px;animation: blink 1s linear infinite}
+    pre{background:#0b1220;padding:12px;border-radius:8px;overflow:auto;border:1px solid rgba(255,255,255,0.02);}
+    .code-wrap{position:relative;}
+    .copy-btn{position:absolute;right:8px;top:8px;background:rgba(255,255,255,0.04);border-radius:6px;padding:6px 8px;border:0;color:#cfe9ff;cursor:pointer;font-size:12px;}
+    .streaming-cursor{display:inline-block;width:6px;height:12px;background:rgba(255,255,255,0.8);margin-left:6px;vertical-align:middle;border-radius:2px;animation: blink 1s linear infinite;}
     @keyframes blink{0%{opacity:1}50%{opacity:0.15}100%{opacity:1}}
-    .stamp{font-size:12px;color:var(--muted);margin-top:6px}
+    .stamp{font-size:12px;color:var(--muted);margin-top:6px;}
+    
+    /* Responsive design */
+    @media (max-width: 1024px) {
+      .panel { display: none; }
+      .msg { max-width: 90%; }
+    }
+    
+    @media (max-width: 768px) {
+      body { padding: 5px; }
+      .app { height: 98vh; border-radius: 8px; }
+      header { padding: 12px 15px; }
+      header h1 { font-size: 14px; }
+      .wrap { padding: 15px; gap: 15px; }
+      .messages { padding: 10px; }
+      .input-row { padding: 10px; }
+      .msg { max-width: 95%; padding: 10px 12px; }
+      button.primary, button.ghost { padding: 8px 12px; font-size: 14px; }
+    }
+    
+    @media (max-width: 480px) {
+      header .title { gap: 8px; }
+      .logo { width: 36px; height: 36px; font-size: 14px; }
+      header h1 { font-size: 12px; }
+      header .meta { font-size: 11px; }
+      .wrap { padding: 10px; gap: 10px; }
+      .messages { padding: 8px; gap: 8px; }
+      .input-row { padding: 8px; gap: 5px; }
+      .msg { max-width: 98%; padding: 8px 10px; font-size: 14px; }
+      .input { padding: 10px; font-size: 14px; }
+      button.primary, button.ghost { padding: 8px 10px; font-size: 13px; }
+    }
   </style>
   <!-- highlightjs -->
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/styles/github-dark.min.css">
