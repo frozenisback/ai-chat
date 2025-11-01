@@ -241,7 +241,8 @@ def stream_ai_generator(sid, user_message, timeout=60):
                     yield sanitized
             return
         # if non-200 or not a Response, fall through to non-stream
-    except Exception:
+    except Exception as e:
+        print(f"Streaming error: {e}")
         pass
 
     # Fallback: non-streaming call
@@ -395,6 +396,7 @@ INDEX_HTML = """
       document.getElementById("modelInfo").textContent = j.model ? j.model : "unknown";
     } catch (e) {
       modelIdEl.textContent = "unknown";
+      console.error("Error fetching model:", e);
     }
   }
   fetchModel();
@@ -409,7 +411,9 @@ INDEX_HTML = """
           appendMessage(m.role, m.content, false);
         });
       }
-    } catch (e) { console.warn(e) }
+    } catch (e) { 
+      console.warn("Error loading history:", e);
+    }
   }
   loadHistory();
 
@@ -424,7 +428,9 @@ INDEX_HTML = """
     return d;
   }
 
-  function escapeHtml(s){ return s.replaceAll('&','&amp;').replaceAll('<','&lt;').replaceAll('>','&gt;'); }
+  function escapeHtml(s){ 
+    return s.replaceAll('&','&amp;').replaceAll('<','&lt;').replaceAll('>','&gt;').replaceAll('"','&quot;').replaceAll("'",'&#39;');
+  }
 
   // Convert AI reply text with code fences into HTML (pre/code)
   function formatReply(text, streaming=false) {
@@ -518,6 +524,7 @@ INDEX_HTML = """
       messagesEl.scrollTop = messagesEl.scrollHeight;
 
     } catch (err) {
+      console.error("Streaming error:", err);
       // network error or streaming not supported: fallback to /chat
       try {
         const r = await fetch("/chat", {
@@ -529,6 +536,7 @@ INDEX_HTML = """
         processCodeBlocks(botEl);
         messagesEl.scrollTop = messagesEl.scrollHeight;
       } catch (e) {
+        console.error("Fallback error:", e);
         botEl.innerHTML = `<div class="meta-small">Error: ${escapeHtml(String(e))}</div>`;
       }
     }
