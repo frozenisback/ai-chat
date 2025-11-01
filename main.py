@@ -182,63 +182,59 @@ def stream_ai_generator(sid, user_message, timeout=60):
         payload = {"model": INFERENCE_MODEL_ID, "messages": build_openai_messages(sid, user_message), "stream": True}
         r = post_json(chat_url, headers, payload, timeout=timeout, stream=True)
         if isinstance(r, requests.Response) and r.status_code == 200:
-            # Process SSE format
-            buffer = ""
-            for line in r.iter_lines(decode_unicode=True):
-                if not line:
+            # Get the raw response text
+            response_text = r.text
+            
+            # Handle the Heroku Inference API format
+            # Split by "event:message" to get individual chunks
+            chunks = response_text.split("event:message")
+            
+            for chunk in chunks:
+                chunk = chunk.strip()
+                if not chunk:
                     continue
-                    
-                # Handle SSE format with "event:message" prefix
-                if line.startswith("event:message"):
-                    # Extract the actual message content after "event:message"
-                    message_content = line[len("event:message"):].strip()
-                    
-                    # Skip empty messages
-                    if not message_content:
+                
+                # Check if it's the "done" event
+                if chunk == "done":
+                    break
+                
+                # Try to parse as JSON
+                try:
+                    js = json.loads(chunk)
+                    # OpenAI-style: choices[0].delta.content
+                    if "choices" in js:
+                        ch = js["choices"][0]
+                        # delta
+                        delta = ch.get("delta", {})
+                        content = None
+                        if isinstance(delta, dict):
+                            content = delta.get("content")
+                        # fallback for other shapes
+                        if not content:
+                            # maybe choices[0].message.content
+                            msg = ch.get("message") or {}
+                            content = msg.get("content") if isinstance(msg, dict) else None
+                        if content:
+                            yield content
+                            continue
+                    # other shapes: maybe 'output' text
+                    if "output" in js:
+                        out = js["output"]
+                        if isinstance(out, str):
+                            yield out
+                        elif isinstance(out, list):
+                            yield " ".join(map(str, out))
+                        else:
+                            yield json.dumps(out)
                         continue
-                        
-                    # Check if it's a JSON message
-                    if message_content.startswith("{") and message_content.endswith("}"):
-                        try:
-                            js = json.loads(message_content)
-                            # OpenAI-style: choices[0].delta.content
-                            if "choices" in js:
-                                ch = js["choices"][0]
-                                # delta
-                                delta = ch.get("delta", {})
-                                content = None
-                                if isinstance(delta, dict):
-                                    content = delta.get("content")
-                                # fallback for other shapes
-                                if not content:
-                                    # maybe choices[0].message.content
-                                    msg = ch.get("message") or {}
-                                    content = msg.get("content") if isinstance(msg, dict) else None
-                                if content:
-                                    yield content
-                                    continue
-                            # other shapes: maybe 'output' text
-                            if "output" in js:
-                                out = js["output"]
-                                if isinstance(out, str):
-                                    yield out
-                                elif isinstance(out, list):
-                                    yield " ".join(map(str, out))
-                                else:
-                                    yield json.dumps(out)
-                                continue
-                        except json.JSONDecodeError:
-                            # Not valid JSON, treat as plain text
-                            pass
-                    
-                    # Handle special case for "done" message
-                    if message_content == "done":
-                        break
-                        
-                    # If not JSON or special case, yield as plain text
-                    # Sanitize the content to remove any potential HTML or script tags
-                    sanitized = html.escape(message_content)
-                    yield sanitized
+                except json.JSONDecodeError:
+                    # Not valid JSON, treat as plain text
+                    pass
+                
+                # If not JSON, yield as plain text
+                # Sanitize the content to remove any potential HTML or script tags
+                sanitized = html.escape(chunk)
+                yield sanitized
             return
         # if non-200 or not a Response, fall through to non-stream
     except Exception as e:
@@ -488,7 +484,7 @@ INDEX_HTML = """
     try {
       const res = await fetch("/stream_chat", {
         method: "POST",
-        headers: {"Content-Type": "application/json"},
+        headers:{"Content-Type":"application/json"},
         body: JSON.stringify({message: text})
       });
 
@@ -501,23 +497,68 @@ INDEX_HTML = """
         return;
       }
 
-      const reader = res.body.getReader();
-      const decoder = new TextDecoder();
+      // Get the response as text and parse it
+      const responseText = await res.text();
+      
+      // Parse the Heroku Inference API format
+      const chunks = responseText.split("event:message");
       let partial = "";
+      
       // we'll replace the current botEl content as we stream
       botEl.innerHTML = `<div class="meta-small"><em>AI:</em> <span id="streaming_span"></span><span class="streaming-cursor"></span></div>`;
       const streamingSpan = botEl.querySelector("#streaming_span");
-
-      while(true){
-        const {done, value} = await reader.read();
-        if (done) break;
-        const chunk = decoder.decode(value, {stream:true});
-        // Append chunk to partial and result
-        partial += chunk;
-        // Naive append: show appended text (convert newlines to <br>)
-        streamingSpan.innerHTML = escapeHtml(partial).replace(/\\n/g,'<br>');
-        messagesEl.scrollTop = messagesEl.scrollHeight;
+      
+      for (const chunk of chunks) {
+        const trimmedChunk = chunk.trim();
+        if (!trimmedChunk) continue;
+        
+        // Check if it's the "done" event
+        if (trimmedChunk === "done") break;
+        
+        // Try to parse as JSON
+        try {
+          const js = JSON.parse(trimmedChunk);
+          // OpenAI-style: choices[0].delta.content
+          if (js.choices && js.choices[0]) {
+            const ch = js.choices[0];
+            // delta
+            const delta = ch.delta || {};
+            let content = delta.content;
+            // fallback for other shapes
+            if (!content) {
+              // maybe choices[0].message.content
+              const msg = ch.message || {};
+              content = msg.content;
+            }
+            if (content) {
+              partial += content;
+              streamingSpan.innerHTML = escapeHtml(partial).replace(/\\n/g,'<br>');
+              messagesEl.scrollTop = messagesEl.scrollHeight;
+              continue;
+            }
+          }
+          // other shapes: maybe 'output' text
+          if (js.output) {
+            const out = js.output;
+            if (typeof out === 'string') {
+              partial += out;
+            } else if (Array.isArray(out)) {
+              partial += out.join('');
+            } else {
+              partial += JSON.stringify(out);
+            }
+            streamingSpan.innerHTML = escapeHtml(partial).replace(/\\n/g,'<br>');
+            messagesEl.scrollTop = messagesEl.scrollHeight;
+            continue;
+          }
+        } catch (e) {
+          // Not valid JSON, treat as plain text
+          partial += trimmedChunk;
+          streamingSpan.innerHTML = escapeHtml(partial).replace(/\\n/g,'<br>');
+          messagesEl.scrollTop = messagesEl.scrollHeight;
+        }
       }
+      
       // stream finished, replace with formatted content (render code blocks)
       botEl.innerHTML = formatReply(partial);
       processCodeBlocks(botEl);
