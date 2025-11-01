@@ -293,8 +293,11 @@ INDEX_HTML = """
     pre{background:#0b1220;padding:12px;border-radius:8px;overflow:auto;border:1px solid rgba(255,255,255,0.02);white-space:pre-wrap;font-size:15px;}
     .code-wrap{position:relative;}
     .copy-btn{position:absolute;right:8px;top:8px;background:rgba(255,255,255,0.04);border-radius:6px;padding:6px 8px;border:0;color:#cfe9ff;cursor:pointer;font-size:12px;}
-    .streaming-cursor{display:inline-block;width:6px;height:12px;background:rgba(255,255,255,0.8);margin-left:6px;vertical-align:middle;border-radius:2px;animation: blink 1s linear infinite;}
-    @keyframes blink{0%{opacity:1}50%{opacity:0.15}100%{opacity:1}}
+    .thinking-animation{display:inline-flex;align-items:center;margin-left:6px;}
+    .thinking-dot{width:6px;height:6px;background:rgba(255,255,255,0.8);border-radius:50%;margin:0 2px;animation: thinking 1.4s infinite ease-in-out;}
+    .thinking-dot:nth-child(1){animation-delay:-0.32s;}
+    .thinking-dot:nth-child(2){animation-delay:-0.16s;}
+    @keyframes thinking{0%,80%,100%{transform:scale(0.8);opacity:0.5}40%{transform:scale(1);opacity:1}}
     .stamp{font-size:13px;color:var(--muted);margin-top:6px;}
     
     /* Responsive design */
@@ -524,8 +527,8 @@ INDEX_HTML = """
     if (!text) return;
     inputBox.value = "";
     appendMessage("user", `<div><strong>You</strong><div class="meta-small">${escapeHtml(text)}</div></div>`);
-    // create bot placeholder
-    const botEl = appendMessage("bot", `<div class="meta-small">AI is typing...</div>`);
+    // create bot placeholder with thinking animation
+    const botEl = appendMessage("bot", `<div class="meta-small"><em>AI is thinking</em><div class="thinking-animation"><div class="thinking-dot"></div><div class="thinking-dot"></div><div class="thinking-dot"></div></div></div>`);
     messagesEl.scrollTop = messagesEl.scrollHeight;
 
     // Attempt streaming endpoint
@@ -549,7 +552,7 @@ INDEX_HTML = """
       const decoder = new TextDecoder();
       let partial = "";
       // we'll replace the current botEl content as we stream
-      botEl.innerHTML = `<div class="meta-small"><em>AI:</em> <span id="streaming_span"></span><span class="streaming-cursor"></span></div>`;
+      botEl.innerHTML = `<div class="meta-small"><em>AI:</em> <span id="streaming_span"></span></div>`;
       const streamingSpan = botEl.querySelector("#streaming_span");
 
       while(true){
@@ -562,8 +565,8 @@ INDEX_HTML = """
         streamingSpan.innerHTML = formatReply(partial, true);
         messagesEl.scrollTop = messagesEl.scrollHeight;
       }
-      // stream finished, remove cursor and finalize formatting
-      streamingSpan.parentElement.innerHTML = formatReply(partial);
+      // stream finished, finalize formatting
+      botEl.innerHTML = formatReply(partial);
       processCodeBlocks(botEl);
       messagesEl.scrollTop = messagesEl.scrollHeight;
 
