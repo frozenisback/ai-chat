@@ -258,7 +258,7 @@ INDEX_HTML = """
   <meta charset="utf-8" />
   <title>Kust — Clean AI Chat</title>
   <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600;700&display=swap" rel="stylesheet">
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
   <style>
     :root{
       --bg:#0f1724; --card:#071023; --muted:#94a3b8; --accent:#7c3aed; --glass:rgba(255,255,255,0.03);
@@ -266,13 +266,13 @@ INDEX_HTML = """
       --bubble-bot:linear-gradient(180deg,#071829,#072a3a);
     }
     *{box-sizing:border-box}
-    html,body{height:100%;margin:0;font-family:Inter,system-ui,-apple-system,Segoe UI,Roboto,Helvetica,Arial;}
+    html,body{height:100%;margin:0;font-family:Inter,system-ui,-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;font-weight:500;}
     body{background:linear-gradient(180deg,#041322 0%, #06182a 100%); color:#e6eef8; display:flex; align-items:center; justify-content:center; padding:10px;}
     .app{width:100%;max-width:1400px;background:var(--card);border-radius:14px;box-shadow:0 10px 40px rgba(2,6,23,0.6);overflow:hidden;border:1px solid rgba(255,255,255,0.03); display:flex; flex-direction:column; height:95vh;}
     header{display:flex;align-items:center;justify-content:space-between;padding:18px 22px;border-bottom:1px solid rgba(255,255,255,0.02); flex-shrink:0;}
     header .title{display:flex;gap:12px;align-items:center}
     .logo{width:44px;height:44px;border-radius:10px;background:linear-gradient(135deg,#7c3aed,#06b6d4);display:flex;align-items:center;justify-content:center;font-weight:700}
-    header h1{font-size:16px;margin:0}
+    header h1{font-size:16px;margin:0;font-weight:600}
     header .meta{color:var(--muted);font-size:13px}
     .wrap{display:flex;gap:20px;padding:22px; flex:1; overflow:hidden;}
     .chat{flex:1;display:flex;flex-direction:column;min-width:0;}
@@ -290,7 +290,7 @@ INDEX_HTML = """
     .panel .card{background:transparent;border-radius:8px;padding:10px;border:1px solid rgba(255,255,255,0.02);}
     .small{font-size:13px;color:var(--muted);}
     /* code blocks */
-    pre{background:#0b1220;padding:12px;border-radius:8px;overflow:auto;border:1px solid rgba(255,255,255,0.02);}
+    pre{background:#0b1220;padding:12px;border-radius:8px;overflow:auto;border:1px solid rgba(255,255,255,0.02);white-space:pre-wrap;}
     .code-wrap{position:relative;}
     .copy-btn{position:absolute;right:8px;top:8px;background:rgba(255,255,255,0.04);border-radius:6px;padding:6px 8px;border:0;color:#cfe9ff;cursor:pointer;font-size:12px;}
     .streaming-cursor{display:inline-block;width:6px;height:12px;background:rgba(255,255,255,0.8);margin-left:6px;vertical-align:middle;border-radius:2px;animation: blink 1s linear infinite;}
@@ -428,18 +428,51 @@ INDEX_HTML = """
   function formatReply(text, streaming=false) {
     if (!text) return "";
     
-    // Handle code blocks properly
-    const codeBlockRegex = /```([\\w\\-+]*)?\\n?([\\s\\S]*?)```/g;
-    let result = text.replace(codeBlockRegex, (match, lang, code) => {
-      // show a copy button wrapper
-      return `<div class="code-wrap"><button class="copy-btn" onclick="copyCode(this)">Copy</button><pre><code class="language-${lang || 'text'}">${escapeHtml(code)}</code></pre></div>`;
-    });
+    // Track if we're inside a code block
+    let inCodeBlock = false;
+    let codeLanguage = "";
+    let codeContent = "";
+    let result = "";
     
-    // Handle inline code
-    result = result.replace(/`([^`]+)`/g, '<code>$1</code>');
+    // Process the text character by character to handle streaming code blocks
+    const lines = text.split('\\n');
     
-    // Handle newlines
-    result = result.replace(/\\n/g, '<br>');
+    for (let i = 0; i < lines.length; i++) {
+      const line = lines[i];
+      
+      // Check for code block start
+      if (line.startsWith('```')) {
+        if (!inCodeBlock) {
+          // Starting a code block
+          inCodeBlock = true;
+          const parts = line.substring(3).trim();
+          codeLanguage = parts || "text";
+          codeContent = "";
+        } else {
+          // Ending a code block
+          inCodeBlock = false;
+          result += `<div class="code-wrap"><button class="copy-btn" onclick="copyCode(this)">Copy</button><pre><code class="language-${codeLanguage}">${escapeHtml(codeContent)}</code></pre></div>`;
+          codeContent = "";
+        }
+      } else if (inCodeBlock) {
+        // Inside a code block, collect content
+        codeContent += (codeContent ? '\\n' : '') + line;
+      } else {
+        // Regular text, handle inline code and formatting
+        let processedLine = line;
+        
+        // Handle inline code
+        processedLine = processedLine.replace(/`([^`]+)`/g, '<code>$1</code>');
+        
+        // Add the processed line
+        result += processedLine + (i < lines.length - 1 ? '<br>' : '');
+      }
+    }
+    
+    // If we're still in a code block (streaming), add it
+    if (inCodeBlock) {
+      result += `<div class="code-wrap"><button class="copy-btn" onclick="copyCode(this)">Copy</button><pre><code class="language-${codeLanguage}">${escapeHtml(codeContent)}</code></pre></div>`;
+    }
     
     return result;
   }
