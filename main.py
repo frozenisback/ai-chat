@@ -268,7 +268,7 @@ INDEX_HTML = """
     *{box-sizing:border-box}
     html,body{height:100%;margin:0;font-family:Inter,system-ui,-apple-system,Segoe UI,Roboto,Helvetica,Arial;}
     body{background:linear-gradient(180deg,#041322 0%, #06182a 100%); color:#e6eef8; display:flex; align-items:center; justify-content:center; padding:10px;}
-    .app{width:100%;max-width:1200px;background:var(--card);border-radius:14px;box-shadow:0 10px 40px rgba(2,6,23,0.6);overflow:hidden;border:1px solid rgba(255,255,255,0.03); display:flex; flex-direction:column; height:95vh;}
+    .app{width:100%;max-width:1400px;background:var(--card);border-radius:14px;box-shadow:0 10px 40px rgba(2,6,23,0.6);overflow:hidden;border:1px solid rgba(255,255,255,0.03); display:flex; flex-direction:column; height:95vh;}
     header{display:flex;align-items:center;justify-content:space-between;padding:18px 22px;border-bottom:1px solid rgba(255,255,255,0.02); flex-shrink:0;}
     header .title{display:flex;gap:12px;align-items:center}
     .logo{width:44px;height:44px;border-radius:10px;background:linear-gradient(135deg,#7c3aed,#06b6d4);display:flex;align-items:center;justify-content:center;font-weight:700}
@@ -286,7 +286,7 @@ INDEX_HTML = """
     button.primary{background:var(--accent);border:none;padding:10px 14px;border-radius:10px;color:white;cursor:pointer;font-weight:600;}
     button.ghost{background:transparent;border:1px solid rgba(255,255,255,0.04);padding:9px 12px;border-radius:10px;color:var(--muted);cursor:pointer;}
     /* right panel */
-    .panel{width:320px;border-left:1px solid rgba(255,255,255,0.02);padding-left:18px;display:flex;flex-direction:column;gap:12px; flex-shrink:0;}
+    .panel{width:280px;border-left:1px solid rgba(255,255,255,0.02);padding-left:18px;display:flex;flex-direction:column;gap:12px; flex-shrink:0;}
     .panel .card{background:transparent;border-radius:8px;padding:10px;border:1px solid rgba(255,255,255,0.02);}
     .small{font-size:13px;color:var(--muted);}
     /* code blocks */
@@ -342,10 +342,6 @@ INDEX_HTML = """
           <div class="meta">Model: <span id="modelid">loading...</span> • Private use</div>
         </div>
       </div>
-      <div style="display:flex;gap:8px;align-items:center">
-        <button id="clearBtn" class="ghost">Clear Chat</button>
-        <button id="downloadBtn" class="ghost">Download Chat</button>
-      </div>
     </header>
 
     <div class="wrap">
@@ -382,8 +378,6 @@ INDEX_HTML = """
   const inputBox = document.getElementById("inputBox");
   const sendBtn = document.getElementById("sendBtn");
   const modelIdEl = document.getElementById("modelid");
-  const clearBtn = document.getElementById("clearBtn");
-  const downloadBtn = document.getElementById("downloadBtn");
 
   // get model info and populate
   async function fetchModel() {
@@ -433,17 +427,21 @@ INDEX_HTML = """
   // Convert AI reply text with code fences into HTML (pre/code)
   function formatReply(text, streaming=false) {
     if (!text) return "";
-    const parts = text.split(/(```[\\s\\S]*?```)/g);
-    return parts.map(p=>{
-      if (p.startsWith("```")) {
-        let content = p.replace(/^```[\\w+\\-]*\\n?/, '').replace(/```$/, '');
-        // show a copy button wrapper
-        return `<div class="code-wrap"><button class="copy-btn" onclick="copyCode(this)">Copy</button><pre><code>${escapeHtml(content)}</code></pre></div>`;
-      } else {
-        // normal text, preserve newlines
-        return `<div>${escapeHtml(p).replace(/\\n/g,'<br>')}</div>`;
-      }
-    }).join("");
+    
+    // Handle code blocks properly
+    const codeBlockRegex = /```([\\w\\-+]*)?\\n?([\\s\\S]*?)```/g;
+    let result = text.replace(codeBlockRegex, (match, lang, code) => {
+      // show a copy button wrapper
+      return `<div class="code-wrap"><button class="copy-btn" onclick="copyCode(this)">Copy</button><pre><code class="language-${lang || 'text'}">${escapeHtml(code)}</code></pre></div>`;
+    });
+    
+    // Handle inline code
+    result = result.replace(/`([^`]+)`/g, '<code>$1</code>');
+    
+    // Handle newlines
+    result = result.replace(/\\n/g, '<br>');
+    
+    return result;
   }
 
   // Attach copy buttons to code blocks (if created dynamically)
@@ -512,12 +510,12 @@ INDEX_HTML = """
         const chunk = decoder.decode(value, {stream:true});
         // Append chunk to partial and result
         partial += chunk;
-        // Naive append: show appended text (convert newlines to <br>)
-        streamingSpan.innerHTML = escapeHtml(partial).replace(/\\n/g,'<br>');
+        // Format and update the streaming content
+        streamingSpan.innerHTML = formatReply(partial, true);
         messagesEl.scrollTop = messagesEl.scrollHeight;
       }
-      // stream finished, replace with formatted content (render code blocks)
-      botEl.innerHTML = formatReply(partial);
+      // stream finished, remove cursor and finalize formatting
+      streamingSpan.parentElement.innerHTML = formatReply(partial);
       processCodeBlocks(botEl);
       messagesEl.scrollTop = messagesEl.scrollHeight;
 
@@ -539,28 +537,6 @@ INDEX_HTML = """
       }
     }
   }
-
-  clearBtn.onclick = async ()=>{
-    if (!confirm("Clear local and server-side conversation?")) return;
-    try {
-      await fetch("/clear", {method: "POST"});
-      messagesEl.innerHTML = "";
-    } catch (e) { console.error(e) }
-  };
-
-  downloadBtn.onclick = async ()=>{
-    try {
-      const r = await fetch("/history");
-      const j = await r.json();
-      const blob = new Blob([JSON.stringify(j, null, 2)], {type: "application/json"});
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement("a");
-      a.href = url;
-      a.download = "kust_chat_history.json";
-      a.click();
-      URL.revokeObjectURL(url);
-    } catch (e) { console.error(e) }
-  };
 
   // On load, ensure code blocks have copy buttons etc
   document.addEventListener("click", (e)=>{
