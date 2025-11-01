@@ -9,7 +9,7 @@ Save as main.py and run as usual. Keep in mind conversation memory is in-memory 
 """
 
 from flask import Flask, request, render_template_string, jsonify, make_response, Response, stream_with_context
-import os, requests, json, re, uuid, time, threading, html
+import os, requests, json, re, uuid, time, threading, html, sys
 
 # ---------- Config ----------
 INFERENCE_URL = os.environ.get("INFERENCE_URL")
@@ -24,9 +24,8 @@ if not INFERENCE_URL or not INFERENCE_KEY or not INFERENCE_MODEL_ID:
 app = Flask(__name__)
 
 # In-memory conversation store: { session_id: [ {role:'user'|'assistant', 'content': '...'}, ... ] }
-# Limited to recent N messages to avoid huge prompts
+# No limit on conversation history
 CHAT_STORE = {}
-CHAT_LIMIT = 20
 
 # ---------- Helpers ----------
 CODE_FENCE_RE = re.compile(r"```(?:([\w+-]+)\n)?(.*?)```", re.S)
@@ -48,9 +47,7 @@ def session_id_from_request(req):
 def append_message(sid, role, content):
     lst = CHAT_STORE.setdefault(sid, [])
     lst.append({"role": role, "content": content})
-    if len(lst) > CHAT_LIMIT:
-        # keep last N
-        CHAT_STORE[sid] = lst[-CHAT_LIMIT:]
+    # No limit on conversation history
 
 def build_openai_messages(sid, user_message):
     """
@@ -72,6 +69,7 @@ def post_json(url, headers, payload, timeout=30, stream=False):
         r = requests.post(url, headers=headers, json=payload, timeout=timeout, stream=stream)
         return r
     except Exception as e:
+        print(f"Request error: {str(e)}", flush=True)
         return {"exception": str(e)}
 
 # Robust non-streaming call (tries multiple shapes)
@@ -87,6 +85,7 @@ def call_ai_nonstream(sid, user_message, timeout=30):
     try:
         chat_url = f"{base}/v1/chat/completions"
         payload = {"model": INFERENCE_MODEL_ID, "messages": build_openai_messages(sid, user_message)}
+        print(f"Making request to {chat_url} with payload: {json.dumps(payload)[:200]}...", flush=True)
         r = post_json(chat_url, headers, payload, timeout=timeout)
         if isinstance(r, requests.Response) and r.status_code == 200:
             jr = r.json()
@@ -110,7 +109,10 @@ def call_ai_nonstream(sid, user_message, timeout=30):
                         # join
                         return {"ok": True, "text": "\n".join(map(str, out))}
             return {"ok": True, "text": r.text}
-    except Exception:
+        else:
+            print(f"Request failed with status {r.status_code if isinstance(r, requests.Response) else 'unknown'}: {r.text if isinstance(r, requests.Response) else str(r)}", flush=True)
+    except Exception as e:
+        print(f"Exception in OpenAI-style call: {str(e)}", flush=True)
         pass
 
     # 2) Try /v1/models/{model_id}/invoke with concatenated prompt
@@ -121,6 +123,7 @@ def call_ai_nonstream(sid, user_message, timeout=30):
         history_text = "\n".join([f"{m['role'].upper()}: {m['content']}" for m in history])
         full_prompt = f"{history_text}\nUSER: {user_message}"
         payload = {"input": full_prompt}
+        print(f"Making request to {invoke_url} with payload: {json.dumps(payload)[:200]}...", flush=True)
         r = post_json(invoke_url, headers, payload, timeout=timeout)
         if isinstance(r, requests.Response) and r.status_code == 200:
             jr = r.json()
@@ -130,13 +133,17 @@ def call_ai_nonstream(sid, user_message, timeout=30):
                 if "result" in jr:
                     return {"ok": True, "text": jr.get("result")}
             return {"ok": True, "text": r.text}
-    except Exception:
+        else:
+            print(f"Request failed with status {r.status_code if isinstance(r, requests.Response) else 'unknown'}: {r.text if isinstance(r, requests.Response) else str(r)}", flush=True)
+    except Exception as e:
+        print(f"Exception in invoke call: {str(e)}", flush=True)
         pass
 
     # 3) try /invoke
     try:
         base_invoke = f"{base}/invoke"
         payload = {"input": user_message}
+        print(f"Making request to {base_invoke} with payload: {json.dumps(payload)[:200]}...", flush=True)
         r = post_json(base_invoke, headers, payload, timeout=timeout)
         if isinstance(r, requests.Response) and r.status_code == 200:
             try:
@@ -145,7 +152,10 @@ def call_ai_nonstream(sid, user_message, timeout=30):
                     return {"ok": True, "text": jr.get("output")}
             except Exception:
                 return {"ok": True, "text": r.text}
-    except Exception:
+        else:
+            print(f"Request failed with status {r.status_code if isinstance(r, requests.Response) else 'unknown'}: {r.text if isinstance(r, requests.Response) else str(r)}", flush=True)
+    except Exception as e:
+        print(f"Exception in base invoke call: {str(e)}", flush=True)
         pass
 
     # 4) final fallback: POST to base
@@ -159,9 +169,11 @@ def call_ai_nonstream(sid, user_message, timeout=30):
             except Exception:
                 return {"ok": True, "text": r.text}
         else:
+            print(f"Request failed with status {r.status_code if isinstance(r, requests.Response) else 'unknown'}: {r.text if isinstance(r, requests.Response) else str(r)}", flush=True)
             if isinstance(r, dict) and r.get("exception"):
                 return {"error": f"Network error: {r.get('exception')}"}
     except Exception as e:
+        print(f"Exception in base POST call: {str(e)}", flush=True)
         return {"error": str(e)}
 
     return {"error": "All inference attempts failed or returned non-200 status."}
@@ -180,6 +192,7 @@ def stream_ai_generator(sid, user_message, timeout=60):
     try:
         chat_url = f"{base}/v1/chat/completions"
         payload = {"model": INFERENCE_MODEL_ID, "messages": build_openai_messages(sid, user_message), "stream": True}
+        print(f"Making streaming request to {chat_url} with payload: {json.dumps(payload)[:200]}...", flush=True)
         r = post_json(chat_url, headers, payload, timeout=timeout, stream=True)
         if isinstance(r, requests.Response) and r.status_code == 200:
             # Process SSE format
@@ -238,9 +251,10 @@ def stream_ai_generator(sid, user_message, timeout=60):
                         decoded_content = html.unescape(data_content)
                         yield decoded_content
             return
-        # if non-200 or not a Response, fall through to non-stream
+        else:
+            print(f"Streaming request failed with status {r.status_code if isinstance(r, requests.Response) else 'unknown'}: {r.text if isinstance(r, requests.Response) else str(r)}", flush=True)
     except Exception as e:
-        print(f"Streaming error: {e}")
+        print(f"Exception in streaming: {str(e)}", flush=True)
         pass
 
     # Fallback: non-streaming call
