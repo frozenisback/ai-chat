@@ -8,8 +8,16 @@ main.py - Single-file Flask chat app (clean UI, streaming tokens, code blocks wi
 Save as main.py and run as usual. Keep in mind conversation memory is in-memory per dyno.
 """
 
-from flask import Flask, request, render_template_string, jsonify, make_response, Response, stream_with_context
-import os, requests, json, re, uuid, time, threading, html, sys
+from flask import Flask, request, render_template_string, jsonify, make_response, Response, stream_with_context, send_from_directory, abort
+import os, requests, json, re, uuid, time, threading, html, sys, io
+
+# Ensure stdout/stderr use utf-8 so emoji in logs don't break
+try:
+    sys.stdout.reconfigure(encoding="utf-8")
+    sys.stderr.reconfigure(encoding="utf-8")
+except Exception:
+    # older Python versions may not have reconfigure; ignore if so
+    pass
 
 # ---------- Config ----------
 INFERENCE_URL = os.environ.get("INFERENCE_URL")
@@ -21,7 +29,10 @@ if not INFERENCE_URL or not INFERENCE_KEY or not INFERENCE_MODEL_ID:
     print("WARNING: INFERENCE_URL, INFERENCE_KEY or INFERENCE_MODEL_ID not set. Set them in Heroku config vars.", flush=True)
 
 # ---------- App ----------
-app = Flask(__name__)
+app = Flask(__name__, static_folder=None)
+
+# Allow very large inputs (50 MB)
+app.config['MAX_CONTENT_LENGTH'] = 50 * 1024 * 1024  # 50 MiB
 
 # In-memory conversation store: { session_id: [ {role:'user'|'assistant', 'content': '...'}, ... ] }
 # No limit on conversation history
@@ -195,30 +206,30 @@ def stream_ai_generator(sid, user_message, timeout=60):
         print(f"Making streaming request to {chat_url} with payload: {json.dumps(payload)[:200]}...", flush=True)
         r = post_json(chat_url, headers, payload, timeout=timeout, stream=True)
         if isinstance(r, requests.Response) and r.status_code == 200:
-            # Process SSE format
+            # Process SSE-like streaming lines and yield small chunks promptly
             for line in r.iter_lines(decode_unicode=True):
                 if not line:
                     continue
-                
+
                 # Handle SSE format with "data:" prefix
                 if line.startswith("data:"):
                     # Extract the actual message content after "data:"
                     data_content = line[len("data:"):].strip()
-                    
+
                     # Skip empty messages
                     if not data_content:
                         continue
-                    
+
                     # Check for [DONE] marker
                     if data_content == "[DONE]":
                         break
-                    
+
                     # Try to parse as JSON
                     try:
                         # HTML decode the content first
                         decoded_content = html.unescape(data_content)
                         js = json.loads(decoded_content)
-                        
+
                         # OpenAI-style: choices[0].delta.content
                         if "choices" in js and js["choices"]:
                             ch = js["choices"][0]
@@ -233,23 +244,24 @@ def stream_ai_generator(sid, user_message, timeout=60):
                                 msg = ch.get("message") or {}
                                 content = msg.get("content") if isinstance(msg, dict) else None
                             if content:
-                                yield content
+                                # yield raw content + newline to help browser flush
+                                yield content + "\n"
                                 continue
                         # other shapes: maybe 'output' text
                         if "output" in js:
                             out = js["output"]
                             if isinstance(out, str):
-                                yield out
+                                yield out + "\n"
                             elif isinstance(out, list):
-                                yield " ".join(map(str, out))
+                                yield " ".join(map(str, out)) + "\n"
                             else:
-                                yield json.dumps(out)
+                                yield json.dumps(out) + "\n"
                             continue
                     except json.JSONDecodeError:
                         # Not valid JSON, treat as plain text
                         # HTML decode first
                         decoded_content = html.unescape(data_content)
-                        yield decoded_content
+                        yield decoded_content + "\n"
             return
         else:
             print(f"Streaming request failed with status {r.status_code if isinstance(r, requests.Response) else 'unknown'}: {r.text if isinstance(r, requests.Response) else str(r)}", flush=True)
@@ -260,11 +272,17 @@ def stream_ai_generator(sid, user_message, timeout=60):
     # Fallback: non-streaming call
     r = call_ai_nonstream(sid, user_message, timeout=timeout)
     if "ok" in r and r["ok"]:
-        yield r.get("text", "")
+        # yield full text once (keep newline to assist client)
+        yield (r.get("text", "") or "") + "\n"
     else:
-        yield f"[Error contacting inference: {r.get('error','unknown')}]"
+        yield f"[Error contacting inference: {r.get('error','unknown')}]\n"
+
+# Utility to return JSON with utf-8 and without escaping emoji
+def json_response(data, status=200):
+    return Response(json.dumps(data, ensure_ascii=False), status=status, mimetype='application/json; charset=utf-8')
 
 # ---------- HTML (clean modern chat UI) ----------
+# Note: added font-face entry to use the repo font at /fonts/NotoColorEmoji.ttf
 INDEX_HTML = """
 <!doctype html>
 <html>
@@ -274,13 +292,20 @@ INDEX_HTML = """
   <meta name="viewport" content="width=device-width,initial-scale=1" />
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
   <style>
+    @font-face {
+      font-family: 'Noto Color Emoji';
+      src: url('/fonts/NotoColorEmoji.ttf') format('truetype');
+      font-weight: normal;
+      font-style: normal;
+      font-display: swap;
+    }
     :root{
       --bg:#0f1724; --card:#071023; --muted:#94a3b8; --accent:#7c3aed; --glass:rgba(255,255,255,0.03);
       --bubble-user:linear-gradient(180deg,#0b1f2b,#09303f);
       --bubble-bot:linear-gradient(180deg,#071829,#072a3a);
     }
     *{box-sizing:border-box}
-    html,body{height:100%;margin:0;font-family:Inter,system-ui,-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;font-weight:500;font-size:16px;}
+    html,body{height:100%;margin:0;font-family:Inter, 'Noto Color Emoji', system-ui,-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;font-weight:500;font-size:16px;}
     body{background:linear-gradient(180deg,#041322 0%, #06182a 100%); color:#e6eef8; display:flex; align-items:center; justify-content:center; padding:10px;}
     .app{width:100%;max-width:1200px;background:var(--card);border-radius:14px;box-shadow:0 10px 40px rgba(2,6,23,0.6);overflow:hidden;border:1px solid rgba(255,255,255,0.03); display:flex; flex-direction:column; height:90vh;margin:0 auto;}
     header{display:flex;align-items:center;justify-content:space-between;padding:18px 22px;border-bottom:1px solid rgba(255,255,255,0.02); flex-shrink:0;}
@@ -303,6 +328,7 @@ INDEX_HTML = """
     .panel{width:280px;border-left:1px solid rgba(255,255,255,0.02);padding-left:18px;display:flex;flex-direction:column;gap:12px; flex-shrink:0;}
     .panel .card{background:transparent;border-radius:8px;padding:10px;border:1px solid rgba(255,255,255,0.02);}
     .small{font-size:14px;color:var(--muted);}
+
     /* code blocks */
     pre{background:#0b1220;padding:12px;border-radius:8px;overflow:auto;border:1px solid rgba(255,255,255,0.02);white-space:pre-wrap;font-size:15px;}
     .code-wrap{position:relative;}
@@ -313,13 +339,13 @@ INDEX_HTML = """
     .thinking-dot:nth-child(2){animation-delay:-0.16s;}
     @keyframes thinking{0%,80%,100%{transform:scale(0.8);opacity:0.5}40%{transform:scale(1);opacity:1}}
     .stamp{font-size:13px;color:var(--muted);margin-top:6px;}
-    
+
     /* Responsive design */
     @media (max-width: 1024px) {
       .panel { display: none; }
       .msg { max-width: 90%; }
     }
-    
+
     @media (max-width: 768px) {
       body { padding: 5px; }
       .app { height: 98vh; border-radius: 8px; }
@@ -331,7 +357,7 @@ INDEX_HTML = """
       .msg { max-width: 95%; padding: 10px 12px; font-size: 15px; }
       button.primary, button.ghost { padding: 8px 12px; font-size: 15px; }
     }
-    
+
     @media (max-width: 480px) {
       header .title { gap: 8px; }
       .logo { width: 36px; height: 36px; font-size: 14px; }
@@ -619,23 +645,47 @@ INDEX_HTML = """
 
 # ---------------------- Flask endpoints ----------------------
 
+# Serve the font from repo root or ./fonts folder if present
+@app.route("/fonts/<path:filename>")
+def serve_font(filename):
+    # Look for font in a few spots: ./fonts/<filename>, ./<filename>
+    tried = []
+    possible_paths = [
+        os.path.join(app.root_path, "fonts"),
+        app.root_path,  # repo root
+    ]
+    for p in possible_paths:
+        full = os.path.join(p, filename)
+        tried.append(full)
+        if os.path.exists(full) and os.path.isfile(full):
+            # safe: this is within our repo
+            try:
+                return send_from_directory(p, filename, mimetype='font/ttf')
+            except Exception as e:
+                print(f"Error serving font {full}: {e}", flush=True)
+                abort(500)
+    print("Font not found; tried: " + ", ".join(tried), flush=True)
+    abort(404)
+
 @app.route("/")
 def index():
     # if no session cookie, set one
     sid = session_id_from_request(request)
     resp = make_response(render_template_string(INDEX_HTML))
     resp.set_cookie("kust_sid", sid, httponly=True, samesite="Lax")
+    # ensure explicit charset
+    resp.headers["Content-Type"] = "text/html; charset=utf-8"
     return resp
 
 @app.route("/_model")
 def modelinfo():
-    return jsonify({"model": INFERENCE_MODEL_ID or ""})
+    return json_response({"model": INFERENCE_MODEL_ID or ""})
 
 @app.route("/history")
 def history():
     sid = session_id_from_request(request)
     # ensure cookie set
-    resp = make_response(jsonify({"history": CHAT_STORE.get(sid, [])}))
+    resp = make_response(json_response({"history": CHAT_STORE.get(sid, [])}))
     resp.set_cookie("kust_sid", sid, httponly=True, samesite="Lax")
     return resp
 
@@ -643,7 +693,7 @@ def history():
 def clear_chat():
     sid = session_id_from_request(request)
     CHAT_STORE.pop(sid, None)
-    resp = make_response(jsonify({"ok": True}))
+    resp = make_response(json_response({"ok": True}))
     resp.set_cookie("kust_sid", sid, httponly=True, samesite="Lax")
     return resp
 
@@ -654,18 +704,23 @@ def chat_nonstream_endpoint():
     Stores conversation in memory.
     """
     sid = session_id_from_request(request)
-    data = request.get_json(force=True)
+    # Force JSON parse; large bodies allowed (MAX_CONTENT_LENGTH configured)
+    try:
+        data = request.get_json(force=True)
+    except Exception as e:
+        return json_response({"error": f"Invalid JSON: {str(e)}"}, status=400)
+
     user_msg = data.get("message", "")
     if not user_msg:
-        return jsonify({"error": "No message provided"}), 400
+        return json_response({"error": "No message provided"}, status=400)
 
     append_message(sid, "user", user_msg)
     r = call_ai_nonstream(sid, user_msg, timeout=30)
     if "error" in r:
-        return jsonify({"error": r["error"]}), 500
+        return json_response({"error": r["error"]}, status=500)
     reply_text = r.get("text", "")
     append_message(sid, "assistant", reply_text)
-    return jsonify({"reply": reply_text})
+    return json_response({"reply": reply_text})
 
 @app.route("/stream_chat", methods=["POST"])
 def stream_chat_endpoint():
@@ -674,28 +729,34 @@ def stream_chat_endpoint():
     Also records conversation in memory (appends final reply).
     """
     sid = session_id_from_request(request)
-    data = request.get_json(force=True)
+    try:
+        data = request.get_json(force=True)
+    except Exception as e:
+        return json_response({"error": f"Invalid JSON: {str(e)}"}, status=400)
+
     user_msg = data.get("message", "")
     if not user_msg:
-        return jsonify({"error": "No message provided"}), 400
+        return json_response({"error": "No message provided"}, status=400)
 
     append_message(sid, "user", user_msg)
 
     def generate():
-        # stream generator yields bytes
+        # stream generator yields text chunks (utf-8 will be used)
         collected = []
-        for chunk in stream_ai_generator(sid, user_msg, timeout=60):
-            # chunk may be small text; yield it directly
-            collected.append(chunk)
-            try:
-                yield chunk
-            except GeneratorExit:
-                break
-        # store final aggregated response in history
-        final = "".join(collected)
-        append_message(sid, "assistant", final)
+        try:
+            for chunk in stream_ai_generator(sid, user_msg, timeout=60):
+                # chunk is a string; append and yield immediately
+                collected.append(chunk)
+                try:
+                    yield chunk
+                except GeneratorExit:
+                    break
+        finally:
+            # store final aggregated response in history (strip trailing newlines)
+            final = "".join(collected).rstrip("\n")
+            append_message(sid, "assistant", final)
 
-    # Return streamed response as plain text
+    # Return streamed response as plain text (utf-8)
     return Response(stream_with_context(generate()), content_type="text/plain; charset=utf-8")
 
 # ---------- Run ----------
