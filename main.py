@@ -1065,7 +1065,7 @@ def chat():
         conversation = conversations[session_id]
         conversation.append({"role": "user", "content": user_input})
         
-        # Create a simplified payload without tools first to test
+        # Create the payload for the streaming request
         payload = {
             "model": MODEL,
             "messages": conversation,
@@ -1074,13 +1074,11 @@ def chat():
             "top_p": 0.9
         }
         
-        # Only add tools if the model supports them
-        # This will help us identify if tools are causing the 400 error
-        if False:  # Set to True after confirming basic functionality works
-            payload["tools"] = tools
-            payload["tool_choice"] = "auto"
+        # Add tools if the model supports them
+        payload["tools"] = tools
+        payload["tool_choice"] = "auto"
         
-        logger.info(f"Sending request to AI model for session {session_id}")
+        logger.info(f"Sending streaming request to AI model for session {session_id}")
         logger.debug(f"Request payload: {json.dumps(payload)}")
 
         def generate():
@@ -1089,26 +1087,7 @@ def chat():
             tool_calls = []
             
             try:
-                # First, let's test with a non-streaming request to see the exact error
-                test_payload = payload.copy()
-                test_payload["stream"] = False
-                
-                test_response = requests.post(
-                    INFERENCE_URL, 
-                    headers=headers, 
-                    json=test_payload, 
-                    timeout=30
-                )
-                
-                if test_response.status_code != 200:
-                    logger.error(f"Test request failed with status {test_response.status_code}")
-                    logger.error(f"Response body: {test_response.text}")
-                    yield f"data: {json.dumps({'error': f'API returned status {test_response.status_code}: {test_response.text}'})}\n\n"
-                    return
-                
-                logger.info("Test request successful, proceeding with streaming request")
-                
-                # Now proceed with the streaming request
+                # Directly make the streaming request without a test request
                 with requests.post(INFERENCE_URL, headers=headers, json=payload, stream=True, timeout=120) as response:
                     if response.status_code != 200:
                         logger.error(f"AI API returned status code {response.status_code}")
@@ -1274,4 +1253,3 @@ if __name__ == "__main__":
     logger.info(f"Starting production server on port {port}")
     print(f"\n[Web UI] Running on http://0.0.0.0:{port}\n")
     serve(app, host="0.0.0.0", port=port, threads=8)
-
