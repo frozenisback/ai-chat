@@ -1255,6 +1255,11 @@ def clear_chat():
 
 # ================== MAIN ==================
 if __name__ == "__main__":
-    logger.info("Starting chat application")
-    print("\n[Web UI] Running on http://127.0.0.1:5000\n")
-    app.run(host="0.0.0.0", port=5000, debug=False)
+    from waitress import serve
+    import os
+
+    port = int(os.environ.get("PORT", 5000))
+    logger.info(f"Starting production server on port {port}")
+    print(f"\n[Web UI] Running on http://0.0.0.0:{port}\n")
+    serve(app, host="0.0.0.0", port=port, threads=8)
+
