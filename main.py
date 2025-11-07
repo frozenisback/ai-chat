@@ -46,118 +46,6 @@ conversations = {}
 # Store session metadata
 session_metadata = {}
 
-
-# ================== TOOLS CONFIG ==================
-# Define available tools/functions
-tools = [
-    {
-        "type": "function",
-        "function": {
-            "name": "get_weather",
-            "description": "Fetches the current weather for a given city.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "city": {
-                        "type": "string",
-                        "description": "The name of the city to get weather for."
-                    }
-                },
-                "required": ["city"]
-            }
-        }
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "calculate",
-            "description": "Performs mathematical calculations.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "expression": {
-                        "type": "string",
-                        "description": "The mathematical expression to evaluate (e.g., '2+2', '10*5')."
-                    }
-                },
-                "required": ["expression"]
-            }
-        }
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "search_web",
-            "description": "Searches the web for information.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "query": {
-                        "type": "string",
-                        "description": "The search query."
-                    }
-                },
-                "required": ["query"]
-            }
-        }
-    }
-]
-
-# Tool execution functions
-def execute_tool(tool_name, parameters):
-    """Execute a tool with the given parameters."""
-    if tool_name == "get_weather":
-        # Validate required parameters
-        if "city" not in parameters or not parameters["city"]:
-            return {
-                "error": "Missing required parameter: city",
-                "example": {
-                    "name": "get_weather",
-                    "parameters": {"city": "New York"}
-                }
-            }
-        
-        # Mock weather function - in a real app, you'd call a weather API
-        city = parameters.get("city", "Unknown")
-        return f"The weather in {city} is currently 72°F with partly cloudy skies."
-    
-    elif tool_name == "calculate":
-        # Validate required parameters
-        if "expression" not in parameters or not parameters["expression"]:
-            return {
-                "error": "Missing required parameter: expression",
-                "example": {
-                    "name": "calculate",
-                    "parameters": {"expression": "2+2"}
-                }
-            }
-        
-        try:
-            expression = parameters.get("expression", "")
-            # In a real app, you'd use a safer evaluation method
-            result = eval(expression)
-            return f"The result of {expression} is {result}."
-        except Exception as e:
-            return f"Error calculating {expression}: {str(e)}"
-    
-    elif tool_name == "search_web":
-        # Validate required parameters
-        if "query" not in parameters or not parameters["query"]:
-            return {
-                "error": "Missing required parameter: query",
-                "example": {
-                    "name": "search_web",
-                    "parameters": {"query": "latest news"}
-                }
-            }
-        
-        # Mock search function - in a real app, you'd call a search API
-        query = parameters.get("query", "")
-        return f"Search results for '{query}': This is a mock search result. In a real implementation, this would connect to a search API."
-    
-    else:
-        return f"Unknown tool: {tool_name}"
-
 # ================== WEB APP ==================
 app = Flask(__name__)
 
@@ -462,27 +350,6 @@ HTML_PAGE = """
             }
         }
 
-        .tool-indicator {
-            display: flex;
-            align-items: center;
-            gap: 0.5rem;
-            padding: 0.75rem 1rem;
-            color: var(--secondary-color);
-        }
-
-        .tool-indicator i {
-            animation: pulse 1.5s infinite ease-in-out;
-        }
-
-        @keyframes pulse {
-            0%, 100% {
-                opacity: 0.5;
-            }
-            50% {
-                opacity: 1;
-            }
-        }
-
         .copy-button {
             position: absolute;
             top: 0.5rem;
@@ -604,17 +471,6 @@ HTML_PAGE = """
             padding: 0.75rem 1rem;
             border-radius: 0.5rem;
             margin: 0.5rem 0;
-        }
-
-        .tool-call {
-            background: rgba(34, 211, 238, 0.1);
-            border: 1px solid rgba(34, 211, 238, 0.3);
-            color: #22d3ee;
-            padding: 0.75rem 1rem;
-            border-radius: 0.5rem;
-            margin: 0.5rem 0;
-            font-family: monospace;
-            font-size: 0.9rem;
         }
 
         .loading-overlay {
@@ -1073,7 +929,6 @@ HTML_PAGE = """
                 let botMessage = '';
                 let buffer = '';
                 let chunksProcessed = 0;
-                let isUsingTool = false;
                 
                 while (true) {
                     const { done, value } = await reader.read();
@@ -1097,22 +952,7 @@ HTML_PAGE = """
                             try {
                                 const data = JSON.parse(line.substring(6));
                                 
-                                // Check if AI is using a tool
-                                if (data.choices && data.choices[0] && data.choices[0].delta && data.choices[0].delta.tool_calls) {
-                                    if (!isUsingTool) {
-                                        isUsingTool = true;
-                                        removeTypingIndicator(typingId);
-                                        const toolId = showToolIndicator();
-                                        typingId = toolId; // Reuse the variable to track the tool indicator
-                                    }
-                                } else if (data.choices && data.choices[0] && data.choices[0].delta && data.choices[0].delta.content) {
-                                    if (isUsingTool) {
-                                        isUsingTool = false;
-                                        removeTypingIndicator(typingId);
-                                        const newTypingId = showTypingIndicator();
-                                        typingId = newTypingId; // Reuse the variable to track the typing indicator
-                                    }
-                                    
+                                if (data.choices && data.choices[0] && data.choices[0].delta && data.choices[0].delta.content) {
                                     const delta = data.choices[0].delta.content;
                                     if (delta) {
                                         botMessage += delta;
@@ -1292,34 +1132,6 @@ HTML_PAGE = """
             chatMessages.scrollTop = chatMessages.scrollHeight;
             
             return typingId;
-        }
-
-        // Show tool indicator
-        function showToolIndicator() {
-            const toolId = 'tool_' + Date.now();
-            const toolDiv = document.createElement('div');
-            toolDiv.className = 'message bot';
-            toolDiv.id = toolId;
-            
-            const avatar = document.createElement('div');
-            avatar.className = 'message-avatar';
-            avatar.innerHTML = '<i class="fas fa-robot"></i>';
-            
-            const content = document.createElement('div');
-            content.className = 'message-content';
-            
-            const toolIndicator = document.createElement('div');
-            toolIndicator.className = 'tool-indicator';
-            toolIndicator.innerHTML = '<i class="fas fa-cogs"></i> Using a tool...';
-            
-            content.appendChild(toolIndicator);
-            toolDiv.appendChild(avatar);
-            toolDiv.appendChild(content);
-            
-            chatMessages.appendChild(toolDiv);
-            chatMessages.scrollTop = chatMessages.scrollHeight;
-            
-            return toolId;
         }
 
         // Remove typing indicator
@@ -1559,32 +1371,7 @@ def chat():
         # Get or create conversation for this session
         if session_id not in conversations:
             conversations[session_id] = [
-                {"role": "system", "content": """You are a helpful AI assistant with access to tools. When using tools, follow these guidelines:
-
-1. ALWAYS provide ALL required parameters for tool calls.
-2. Tool calls must be in the following format:
-   {
-     "name": "tool_name",
-     "parameters": {
-       "param1": "value1",
-       "param2": "value2"
-     }
-   }
-
-3. For the get_weather tool, you MUST provide:
-   - name: "get_weather"
-   - parameters: {"city": "City Name"} (city is required)
-
-4. For the calculate tool, you MUST provide:
-   - name: "calculate"
-   - parameters: {"expression": "math expression"} (expression is required)
-
-5. For the search_web tool, you MUST provide:
-   - name: "search_web"
-   - parameters: {"query": "search terms"} (query is required)
-
-6. If a tool call fails, analyze the error message and try again with correct parameters.
-7. Always explain what you're doing when using a tool."""}
+                {"role": "system", "content": "You are a helpful AI assistant. Respond in a conversational, friendly manner. Be concise but thorough in your answers."}
             ]
             logger.info(f"Created new conversation for session {session_id}")
         
@@ -1600,17 +1387,12 @@ def chat():
             "top_p": 0.9
         }
         
-        # Add tools if the model supports them
-        payload["tools"] = tools
-        payload["tool_choice"] = "auto"
-        
         logger.info(f"Sending streaming request to AI model for session {session_id}")
         logger.debug(f"Request payload: {json.dumps(payload)}")
 
         def generate():
             full_reply = ""
             chunk_count = 0
-            tool_calls = []
             
             try:
                 # Directly make the streaming request without a test request
@@ -1634,34 +1416,12 @@ def chat():
                             data = json.loads(event.data)
                             logger.debug(f"Parsed data: {data}")
                             
-                            # Check for tool calls
+                            # Check for content in the response
                             if "choices" in data and len(data["choices"]) > 0:
                                 delta = data["choices"][0].get("delta", {})
                                 
-                                # Handle tool calls
-                                if "tool_calls" in delta:
-                                    for tool_call in delta["tool_calls"]:
-                                        if "id" in tool_call:
-                                            # New tool call
-                                            tool_calls.append({
-                                                "id": tool_call["id"],
-                                                "type": tool_call.get("type", "function"),
-                                                "function": {
-                                                    "name": tool_call.get("function", {}).get("name", ""),
-                                                    "arguments": tool_call.get("function", {}).get("arguments", "")
-                                                }
-                                            })
-                                        elif "function" in tool_call:
-                                            # Update existing tool call
-                                            for existing_call in tool_calls:
-                                                if existing_call["id"] == tool_call.get("id", ""):
-                                                    if "name" in tool_call["function"]:
-                                                        existing_call["function"]["name"] = tool_call["function"]["name"]
-                                                    if "arguments" in tool_call["function"]:
-                                                        existing_call["function"]["arguments"] += tool_call["function"]["arguments"]
-                                
                                 # Handle regular content
-                                elif "content" in delta:
+                                if "content" in delta:
                                     content = delta["content"]
                                     if content:
                                         full_reply += content
@@ -1673,106 +1433,7 @@ def chat():
                             logger.error(f"Error processing chunk: {str(e)}")
                             pass
                     
-                    # Process tool calls if any
-                    if tool_calls:
-                        logger.info(f"Processing {len(tool_calls)} tool calls")
-                        tool_results = []
-                        
-                        for tool_call in tool_calls:
-                            tool_name = tool_call["function"]["name"]
-                            # Parse arguments properly
-                            try:
-                                tool_args = json.loads(tool_call["function"]["arguments"]) if tool_call["function"]["arguments"] else {}
-                            except json.JSONDecodeError:
-                                # If arguments are not valid JSON, create an empty dict
-                                tool_args = {}
-                            
-                            logger.info(f"Executing tool {tool_name} with args {tool_args}")
-                            tool_result = execute_tool(tool_name, tool_args)
-                            
-                            # Check if tool result is an error
-                            if isinstance(tool_result, dict) and "error" in tool_result:
-                                logger.error(f"Tool execution error: {tool_result['error']}")
-                                # Add error message to conversation for AI to correct
-                                error_message = f"Error in tool call: {tool_result['error']}. "
-                                if "example" in tool_result:
-                                    error_message += f"Example of correct usage: {json.dumps(tool_result['example'])}"
-                                
-                                # Add a message to the conversation with the error and example
-                                conversation.append({
-                                    "role": "assistant",
-                                    "content": None,
-                                    "tool_calls": [tool_call]
-                                })
-                                conversation.append({
-                                    "role": "tool",
-                                    "tool_call_id": tool_call["id"],
-                                    "name": tool_name,
-                                    "content": error_message
-                                })
-                                
-                                # Add a user message with instructions on how to fix the error
-                                conversation.append({
-                                    "role": "user",
-                                    "content": f"You made an error in your tool call. {error_message}. Please try again with the correct parameters."
-                                })
-                                
-                                # Yield the error message to the user
-                                yield f"data: {json.dumps({'choices': [{'delta': {'content': f'I made an error in my tool call: {error_message}. Let me try again with the correct parameters.'}}]})}\n\n"
-                            else:
-                                tool_results.append({
-                                    "tool_call_id": tool_call["id"],
-                                    "output": tool_result
-                                })
-                                
-                                # Add tool call and result to conversation
-                                conversation.append({
-                                    "role": "assistant",
-                                    "content": None,
-                                    "tool_calls": [tool_call]
-                                })
-                                conversation.append({
-                                    "role": "tool",
-                                    "tool_call_id": tool_call["id"],
-                                    "name": tool_name,
-                                    "content": tool_result
-                                })
-                        
-                        # Send a new request with tool results
-                        follow_up_payload = {
-                            "model": MODEL,
-                            "messages": conversation,
-                            "stream": True,
-                            "max_tokens": 64000,  # API max limit is 64k
-                            "tools": tools,
-                            "tool_choice": "auto",
-                            "top_p": 0.9
-                        }
-                        
-                        with requests.post(INFERENCE_URL, headers=headers, json=follow_up_payload, stream=True, timeout=120) as follow_up_response:
-                            if follow_up_response.status_code != 200:
-                                logger.error(f"Follow-up AI API returned status code {follow_up_response.status_code}")
-                                yield f"data: {json.dumps({'error': f'Follow-up AI API returned status code {follow_up_response.status_code}'})}\n\n"
-                                return
-                            
-                            follow_up_client = sseclient.SSEClient(follow_up_response)
-                            for event in follow_up_client.events():
-                                if event.data.strip() == "[DONE]":
-                                    break
-                                try:
-                                    data = json.loads(event.data)
-                                    delta = data["choices"][0]["delta"].get("content", "")
-                                    if delta:
-                                        full_reply += delta
-                                        chunk_count += 1
-                                        logger.debug(f"Yielding follow-up delta: {delta}")
-                                        yield f"data: {json.dumps(data)}\n\n"
-                                except Exception as e:
-                                    logger.error(f"Error processing follow-up chunk: {str(e)}")
-                                    pass
-                    
                     # Save the complete response to conversation
-                    # Only add content if there's actual content, not just tool calls
                     if full_reply:
                         conversation.append({"role": "assistant", "content": full_reply})
                     logger.info(f"Saved response to conversation for session {session_id}")
@@ -1799,32 +1460,7 @@ def clear_chat():
         
         if session_id in conversations:
             conversations[session_id] = [
-                {"role": "system", "content": """You are a helpful AI assistant with access to tools. When using tools, follow these guidelines:
-
-1. ALWAYS provide ALL required parameters for tool calls.
-2. Tool calls must be in the following format:
-   {
-     "name": "tool_name",
-     "parameters": {
-       "param1": "value1",
-       "param2": "value2"
-     }
-   }
-
-3. For the get_weather tool, you MUST provide:
-   - name: "get_weather"
-   - parameters: {"city": "City Name"} (city is required)
-
-4. For the calculate tool, you MUST provide:
-   - name: "calculate"
-   - parameters: {"expression": "math expression"} (expression is required)
-
-5. For the search_web tool, you MUST provide:
-   - name: "search_web"
-   - parameters: {"query": "search terms"} (query is required)
-
-6. If a tool call fails, analyze the error message and try again with correct parameters.
-7. Always explain what you're doing when using a tool."""}
+                {"role": "system", "content": "You are a helpful AI assistant. Respond in a conversational, friendly manner. Be concise but thorough in your answers."}
             ]
             logger.info(f"Reset conversation for session {session_id}")
         
