@@ -7,6 +7,7 @@ import uuid
 import logging
 from logging.handlers import RotatingFileHandler
 import os
+import tiktoken  # <-- NEW: Import for token counting
 
 # ================== LOGGING CONFIG ==================
 # Set up logging
@@ -19,7 +20,6 @@ logging.basicConfig(
     ]
 )
 logger = logging.getLogger(__name__)
-
 
 INFERENCE_KEY = os.getenv("INFERENCE_KEY")
 INFERENCE_BASE_URL = os.getenv("INFERENCE_URL", "https://us.inference.heroku.com")
@@ -45,6 +45,88 @@ headers = {
 conversations = {}
 # Store session metadata
 session_metadata = {}
+
+# ================== TOKEN MANAGEMENT ==================
+# Initialize the tokenizer for your model
+# Claude 3.5/4.5 Sonnet uses a tokenizer similar to GPT-4, so we use 'cl100k_base'
+try:
+    tokenizer = tiktoken.get_encoding("cl100k_base")
+    def count_tokens(text):
+        return len(tokenizer.encode(text))
+except Exception as e:
+    logger.error(f"Failed to load tiktoken tokenizer: {e}. Using rough character-based estimate.")
+    # Fallback: a very rough estimate if tiktoken fails (1 token ≈ 4 characters for English)
+    def count_tokens(text):
+        return len(text) // 4
+
+def trim_conversation(conversation, max_tokens=2000):
+    """
+    Trims the conversation history to stay within the token limit.
+    It summarizes older messages to preserve context.
+    """
+    # System message is always kept
+    system_message = conversation[0]
+    
+    # We always keep the last 5 exchanges (10 messages) for immediate context
+    recent_messages = conversation[-10:]
+    
+    # The messages to be summarized are everything in between
+    messages_to_summarize = conversation[1:-10]
+    
+    # If there's nothing to summarize, we're good
+    if not messages_to_summarize:
+        return conversation
+
+    # Count tokens in the parts we plan to keep
+    tokens_in_system = count_tokens(system_message['content'])
+    tokens_in_recent = sum(count_tokens(msg['content']) for msg in recent_messages)
+    
+    # If we're already under the limit, return the original conversation
+    if (tokens_in_system + tokens_in_recent) < max_tokens:
+        return conversation
+
+    logger.info(f"Conversation for session is too long. Summarizing {len(messages_to_summarize)} older messages.")
+    
+    # Create a text block from the messages to be summarized
+    summary_text = "\n".join(
+        f"{msg['role'].capitalize()}: {msg['content']}" for msg in messages_to_summarize
+    )
+    
+    # --- Create a summary using the AI model ---
+    summary_payload = {
+        "model": MODEL,
+        "messages": [
+            {"role": "system", "content": "Summarize the following conversation concisely, preserving key details and context. The summary will be used to continue the conversation."},
+            {"role": "user", "content": summary_text}
+        ],
+        "stream": False, # We need the whole summary at once
+        "max_tokens": 500, # Keep the summary short
+    }
+    
+    try:
+        logger.info("Requesting conversation summary from AI model...")
+        summary_response = requests.post(INFERENCE_URL, headers=headers, json=summary_payload, timeout=30)
+        summary_response.raise_for_status()
+        
+        summary_data = summary_response.json()
+        summary_content = summary_data['choices'][0]['message']['content']
+        
+        logger.info(f"Successfully generated summary of length: {len(summary_content)}")
+        
+    except Exception as e:
+        logger.error(f"Failed to generate summary: {e}. Falling back to a generic message.")
+        # Fallback if summarization fails
+        summary_content = "[Previous conversation context was summarized to save space.]"
+
+    # Rebuild the new, shorter conversation
+    new_conversation = [
+        system_message,
+        {"role": "assistant", "content": f"Here is a summary of the earlier conversation: {summary_content}"},
+        {"role": "system", "content": "Continue the conversation based on the summary and the following messages."}
+    ]
+    new_conversation.extend(recent_messages)
+    
+    return new_conversation
 
 # ================== WEB APP ==================
 app = Flask(__name__)
@@ -1375,32 +1457,35 @@ def chat():
             ]
             logger.info(f"Created new conversation for session {session_id}")
         
-        conversation = conversations[session_id]
-        conversation.append({"role": "user", "content": user_input})
+        # IMPORTANT: Append the new user message to the FULL history in memory
+        conversations[session_id].append({"role": "user", "content": user_input})
+        
+        # *** NEW: Trim the conversation before sending to the AI ***
+        # This creates a temporary, shorter version of the history for the API call
+        conversation_to_send = trim_conversation(conversations[session_id], max_tokens=2000)
         
         # Create the payload for the streaming request
         payload = {
             "model": MODEL,
-            "messages": conversation,
+            "messages": conversation_to_send, # Send the trimmed version
             "stream": True,
-            "max_tokens": 64000,  # API max limit is 64k
+            "max_tokens": 64000,
             "top_p": 0.9
         }
         
         logger.info(f"Sending streaming request to AI model for session {session_id}")
-        logger.debug(f"Request payload: {json.dumps(payload)}")
+        logger.debug(f"Request payload (trimmed): {json.dumps(payload)}")
 
         def generate():
             full_reply = ""
             chunk_count = 0
             
             try:
-                # Directly make the streaming request without a test request
                 with requests.post(INFERENCE_URL, headers=headers, json=payload, stream=True, timeout=120) as response:
                     if response.status_code != 200:
                         logger.error(f"AI API returned status code {response.status_code}")
                         logger.error(f"Response headers: {response.headers}")
-                        logger.error(f"Response text: {response.text[:500]}")  # Log first 500 chars of response
+                        logger.error(f"Response text: {response.text[:500]}")
                         yield f"data: {json.dumps({'error': f'AI API returned status code {response.status_code}: {response.text[:200]}'})}\n\n"
                         return
                     
@@ -1408,34 +1493,29 @@ def chat():
                     client = sseclient.SSEClient(response)
                     
                     for event in client.events():
-                        logger.debug(f"Received event: {event}")
                         if event.data.strip() == "[DONE]":
                             logger.info(f"Stream completed for session {session_id}, total chunks: {chunk_count}, total length: {len(full_reply)}")
                             break
                         try:
                             data = json.loads(event.data)
-                            logger.debug(f"Parsed data: {data}")
                             
-                            # Check for content in the response
                             if "choices" in data and len(data["choices"]) > 0:
                                 delta = data["choices"][0].get("delta", {})
                                 
-                                # Handle regular content
                                 if "content" in delta:
                                     content = delta["content"]
                                     if content:
                                         full_reply += content
                                         chunk_count += 1
-                                        logger.debug(f"Yielding delta: {content}")
-                                        # Format as SSE for proper frontend parsing
                                         yield f"data: {json.dumps(data)}\n\n"
                         except Exception as e:
                             logger.error(f"Error processing chunk: {str(e)}")
                             pass
                     
-                    # Save the complete response to conversation
+                    # *** MODIFIED: Save the response to the ORIGINAL conversation history ***
+                    # This ensures the full history is preserved in memory for future summarization
                     if full_reply:
-                        conversation.append({"role": "assistant", "content": full_reply})
+                        conversations[session_id].append({"role": "assistant", "content": full_reply})
                     logger.info(f"Saved response to conversation for session {session_id}")
             except requests.exceptions.Timeout:
                 logger.error(f"Request timeout for session {session_id}")
