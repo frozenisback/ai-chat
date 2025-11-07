@@ -1206,7 +1206,7 @@ def chat():
             "model": MODEL,
             "messages": conversation,
             "stream": True,
-            "max_tokens": 5000,  # Limited to 5k tokens
+            "max_tokens": 64000,  # API max limit is 64k
             "top_p": 0.9
         }
         
@@ -1322,7 +1322,7 @@ def chat():
                             "model": MODEL,
                             "messages": conversation,
                             "stream": True,
-                            "max_tokens": 5000,  # Limited to 5k tokens
+                            "max_tokens": 64000,  # API max limit is 64k
                             "tools": tools,
                             "tool_choice": "auto",
                             "top_p": 0.9
