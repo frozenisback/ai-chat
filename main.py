@@ -107,11 +107,31 @@ tools = [
 def execute_tool(tool_name, parameters):
     """Execute a tool with the given parameters."""
     if tool_name == "get_weather":
+        # Validate required parameters
+        if "city" not in parameters or not parameters["city"]:
+            return {
+                "error": "Missing required parameter: city",
+                "example": {
+                    "name": "get_weather",
+                    "parameters": {"city": "New York"}
+                }
+            }
+        
         # Mock weather function - in a real app, you'd call a weather API
         city = parameters.get("city", "Unknown")
         return f"The weather in {city} is currently 72°F with partly cloudy skies."
     
     elif tool_name == "calculate":
+        # Validate required parameters
+        if "expression" not in parameters or not parameters["expression"]:
+            return {
+                "error": "Missing required parameter: expression",
+                "example": {
+                    "name": "calculate",
+                    "parameters": {"expression": "2+2"}
+                }
+            }
+        
         try:
             expression = parameters.get("expression", "")
             # In a real app, you'd use a safer evaluation method
@@ -121,6 +141,16 @@ def execute_tool(tool_name, parameters):
             return f"Error calculating {expression}: {str(e)}"
     
     elif tool_name == "search_web":
+        # Validate required parameters
+        if "query" not in parameters or not parameters["query"]:
+            return {
+                "error": "Missing required parameter: query",
+                "example": {
+                    "name": "search_web",
+                    "parameters": {"query": "latest news"}
+                }
+            }
+        
         # Mock search function - in a real app, you'd call a search API
         query = parameters.get("query", "")
         return f"Search results for '{query}': This is a mock search result. In a real implementation, this would connect to a search API."
@@ -1529,7 +1559,17 @@ def chat():
         # Get or create conversation for this session
         if session_id not in conversations:
             conversations[session_id] = [
-                {"role": "system", "content": "You are a helpful AI assistant."}
+                {"role": "system", "content": """You are a helpful AI assistant with access to tools. When using tools, follow these guidelines:
+
+1. Always provide ALL required parameters for tool calls.
+2. If a tool call fails, analyze the error message and try again with correct parameters.
+3. Format tool calls as follows:
+   - For get_weather: {"name": "get_weather", "parameters": {"city": "City Name"}}
+   - For calculate: {"name": "calculate", "parameters": {"expression": "2+2"}}
+   - For search_web: {"name": "search_web", "parameters": {"query": "search terms"}}
+
+4. If you make an error in a tool call, acknowledge it and provide the correct format.
+5. Always explain what you're doing when using a tool."""}
             ]
             logger.info(f"Created new conversation for session {session_id}")
         
@@ -1634,23 +1674,47 @@ def chat():
                             
                             logger.info(f"Executing tool {tool_name} with args {tool_args}")
                             tool_result = execute_tool(tool_name, tool_args)
-                            tool_results.append({
-                                "tool_call_id": tool_call["id"],
-                                "output": tool_result
-                            })
                             
-                            # Add tool call and result to conversation
-                            conversation.append({
-                                "role": "assistant",
-                                "content": None,
-                                "tool_calls": [tool_call]
-                            })
-                            conversation.append({
-                                "role": "tool",
-                                "tool_call_id": tool_call["id"],
-                                "name": tool_name,
-                                "content": tool_result
-                            })
+                            # Check if tool result is an error
+                            if isinstance(tool_result, dict) and "error" in tool_result:
+                                logger.error(f"Tool execution error: {tool_result['error']}")
+                                # Add error message to conversation for AI to correct
+                                error_message = f"Error in tool call: {tool_result['error']}. "
+                                if "example" in tool_result:
+                                    error_message += f"Example of correct usage: {json.dumps(tool_result['example'])}"
+                                
+                                conversation.append({
+                                    "role": "assistant",
+                                    "content": None,
+                                    "tool_calls": [tool_call]
+                                })
+                                conversation.append({
+                                    "role": "tool",
+                                    "tool_call_id": tool_call["id"],
+                                    "name": tool_name,
+                                    "content": error_message
+                                })
+                                
+                                # Yield the error message to the user
+                                yield f"data: {json.dumps({'choices': [{'delta': {'content': f'I made an error in my tool call: {error_message}. Let me try again with the correct parameters.'}}]})}\n\n"
+                            else:
+                                tool_results.append({
+                                    "tool_call_id": tool_call["id"],
+                                    "output": tool_result
+                                })
+                                
+                                # Add tool call and result to conversation
+                                conversation.append({
+                                    "role": "assistant",
+                                    "content": None,
+                                    "tool_calls": [tool_call]
+                                })
+                                conversation.append({
+                                    "role": "tool",
+                                    "tool_call_id": tool_call["id"],
+                                    "name": tool_name,
+                                    "content": tool_result
+                                })
                         
                         # Send a new request with tool results
                         follow_up_payload = {
@@ -1713,7 +1777,17 @@ def clear_chat():
         
         if session_id in conversations:
             conversations[session_id] = [
-                {"role": "system", "content": "You are a helpful AI assistant."}
+                {"role": "system", "content": """You are a helpful AI assistant with access to tools. When using tools, follow these guidelines:
+
+1. Always provide ALL required parameters for tool calls.
+2. If a tool call fails, analyze the error message and try again with correct parameters.
+3. Format tool calls as follows:
+   - For get_weather: {"name": "get_weather", "parameters": {"city": "City Name"}}
+   - For calculate: {"name": "calculate", "parameters": {"expression": "2+2"}}
+   - For search_web: {"name": "search_web", "parameters": {"query": "search terms"}}
+
+4. If you make an error in a tool call, acknowledge it and provide the correct format.
+5. Always explain what you're doing when using a tool."""}
             ]
             logger.info(f"Reset conversation for session {session_id}")
         
