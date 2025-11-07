@@ -354,6 +354,7 @@ HTML_PAGE = """
             border: 1px solid var(--code-border);
             max-height: 500px;
             overflow-y: auto;
+            position: relative;
         }
 
         .message-text code {
@@ -427,6 +428,54 @@ HTML_PAGE = """
                 transform: scale(1);
                 opacity: 1;
             }
+        }
+
+        .tool-indicator {
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+            padding: 0.75rem 1rem;
+            color: var(--secondary-color);
+        }
+
+        .tool-indicator i {
+            animation: pulse 1.5s infinite ease-in-out;
+        }
+
+        @keyframes pulse {
+            0%, 100% {
+                opacity: 0.5;
+            }
+            50% {
+                opacity: 1;
+            }
+        }
+
+        .copy-button {
+            position: absolute;
+            top: 0.5rem;
+            right: 0.5rem;
+            background: rgba(255, 255, 255, 0.1);
+            border: none;
+            color: var(--text-secondary);
+            width: 30px;
+            height: 30px;
+            border-radius: 0.25rem;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            cursor: pointer;
+            transition: all 0.2s ease;
+            opacity: 0;
+        }
+
+        .message-text pre:hover .copy-button {
+            opacity: 1;
+        }
+
+        .copy-button:hover {
+            background: rgba(255, 255, 255, 0.2);
+            color: var(--text-color);
         }
 
         .chat-input-container {
@@ -668,7 +717,7 @@ HTML_PAGE = """
 
         <div class="chat-input-container">
             <form class="chat-input-form" id="chat-form">
-                <input type="text" class="chat-input" id="user-input" placeholder="Type your message..." autocomplete="off">
+                <input type="text" class="chat-input" id="user-input" placeholder="Type your message..." autocomplete="off" maxlength="5000">
                 <div class="chat-actions">
                     <button type="button" class="chat-action-btn" id="attach-btn" title="Attach File">
                         <i class="fas fa-paperclip"></i>
@@ -802,6 +851,7 @@ HTML_PAGE = """
                 let botMessage = '';
                 let buffer = '';
                 let chunksProcessed = 0;
+                let isUsingTool = false;
                 
                 while (true) {
                     const { done, value } = await reader.read();
@@ -824,18 +874,36 @@ HTML_PAGE = """
                         if (line.startsWith('data: ')) {
                             try {
                                 const data = JSON.parse(line.substring(6));
-                                const delta = data.choices[0].delta.content;
-                                if (delta) {
-                                    botMessage += delta;
+                                
+                                // Check if AI is using a tool
+                                if (data.choices && data.choices[0] && data.choices[0].delta && data.choices[0].delta.tool_calls) {
+                                    if (!isUsingTool) {
+                                        isUsingTool = true;
+                                        removeTypingIndicator(typingId);
+                                        const toolId = showToolIndicator();
+                                        typingId = toolId; // Reuse the variable to track the tool indicator
+                                    }
+                                } else if (data.choices && data.choices[0] && data.choices[0].delta && data.choices[0].delta.content) {
+                                    if (isUsingTool) {
+                                        isUsingTool = false;
+                                        removeTypingIndicator(typingId);
+                                        const newTypingId = showTypingIndicator();
+                                        typingId = newTypingId; // Reuse the variable to track the typing indicator
+                                    }
                                     
-                                    // Use throttled updates for better performance
-                                    const now = Date.now();
-                                    if (now - lastUpdateTime > UPDATE_THROTTLE_MS) {
-                                        if (updateTimeout) clearTimeout(updateTimeout);
-                                        updateTimeout = setTimeout(() => {
-                                            updateMessage(currentMessageId, botMessage);
-                                            lastUpdateTime = Date.now();
-                                        }, 0);
+                                    const delta = data.choices[0].delta.content;
+                                    if (delta) {
+                                        botMessage += delta;
+                                        
+                                        // Use throttled updates for better performance
+                                        const now = Date.now();
+                                        if (now - lastUpdateTime > UPDATE_THROTTLE_MS) {
+                                            if (updateTimeout) clearTimeout(updateTimeout);
+                                            updateTimeout = setTimeout(() => {
+                                                updateMessage(currentMessageId, botMessage);
+                                                lastUpdateTime = Date.now();
+                                            }, 0);
+                                        }
                                     }
                                 }
                             } catch (e) {
@@ -893,6 +961,24 @@ HTML_PAGE = """
                 // Highlight code blocks
                 messageText.querySelectorAll('pre code').forEach((block) => {
                     hljs.highlightElement(block);
+                    
+                    // Add copy button to code blocks
+                    const pre = block.parentElement;
+                    const copyButton = document.createElement('button');
+                    copyButton.className = 'copy-button';
+                    copyButton.innerHTML = '<i class="fas fa-copy"></i>';
+                    copyButton.title = 'Copy code';
+                    copyButton.addEventListener('click', () => {
+                        navigator.clipboard.writeText(block.textContent).then(() => {
+                            copyButton.innerHTML = '<i class="fas fa-check"></i>';
+                            setTimeout(() => {
+                                copyButton.innerHTML = '<i class="fas fa-copy"></i>';
+                            }, 2000);
+                        }).catch(err => {
+                            console.error('Failed to copy: ', err);
+                        });
+                    });
+                    pre.appendChild(copyButton);
                 });
             } else {
                 messageText.textContent = text;
@@ -929,7 +1015,29 @@ HTML_PAGE = """
                         // Highlight code blocks
                         messageText.querySelectorAll('pre code').forEach((block) => {
                             hljs.highlightElement(block);
+                            
+                            // Add copy button to code blocks
+                            const pre = block.parentElement;
+                            if (!pre.querySelector('.copy-button')) {
+                                const copyButton = document.createElement('button');
+                                copyButton.className = 'copy-button';
+                                copyButton.innerHTML = '<i class="fas fa-copy"></i>';
+                                copyButton.title = 'Copy code';
+                                copyButton.addEventListener('click', () => {
+                                    navigator.clipboard.writeText(block.textContent).then(() => {
+                                        copyButton.innerHTML = '<i class="fas fa-check"></i>';
+                                        setTimeout(() => {
+                                            copyButton.innerHTML = '<i class="fas fa-copy"></i>';
+                                        }, 2000);
+                                    }).catch(err => {
+                                        console.error('Failed to copy: ', err);
+                                    });
+                                });
+                                pre.appendChild(copyButton);
+                            }
                         });
+                        
+                        // Auto-scroll to bottom
                         chatMessages.scrollTop = chatMessages.scrollHeight;
                     });
                 }
@@ -962,6 +1070,34 @@ HTML_PAGE = """
             chatMessages.scrollTop = chatMessages.scrollHeight;
             
             return typingId;
+        }
+
+        // Show tool indicator
+        function showToolIndicator() {
+            const toolId = 'tool_' + Date.now();
+            const toolDiv = document.createElement('div');
+            toolDiv.className = 'message bot';
+            toolDiv.id = toolId;
+            
+            const avatar = document.createElement('div');
+            avatar.className = 'message-avatar';
+            avatar.innerHTML = '<i class="fas fa-robot"></i>';
+            
+            const content = document.createElement('div');
+            content.className = 'message-content';
+            
+            const toolIndicator = document.createElement('div');
+            toolIndicator.className = 'tool-indicator';
+            toolIndicator.innerHTML = '<i class="fas fa-cogs"></i> Using a tool...';
+            
+            content.appendChild(toolIndicator);
+            toolDiv.appendChild(avatar);
+            toolDiv.appendChild(content);
+            
+            chatMessages.appendChild(toolDiv);
+            chatMessages.scrollTop = chatMessages.scrollHeight;
+            
+            return toolId;
         }
 
         // Remove typing indicator
@@ -1070,7 +1206,7 @@ def chat():
             "model": MODEL,
             "messages": conversation,
             "stream": True,
-            "max_tokens": 64000,  # Set max tokens to 10 million
+            "max_tokens": 5000,  # Limited to 5k tokens
             "top_p": 0.9
         }
         
@@ -1154,7 +1290,12 @@ def chat():
                         
                         for tool_call in tool_calls:
                             tool_name = tool_call["function"]["name"]
-                            tool_args = json.loads(tool_call["function"]["arguments"]) if tool_call["function"]["arguments"] else {}
+                            # Parse arguments properly
+                            try:
+                                tool_args = json.loads(tool_call["function"]["arguments"]) if tool_call["function"]["arguments"] else {}
+                            except json.JSONDecodeError:
+                                # If arguments are not valid JSON, create an empty dict
+                                tool_args = {}
                             
                             logger.info(f"Executing tool {tool_name} with args {tool_args}")
                             tool_result = execute_tool(tool_name, tool_args)
@@ -1181,7 +1322,7 @@ def chat():
                             "model": MODEL,
                             "messages": conversation,
                             "stream": True,
-                            "max_tokens": 64000,  # Set max tokens to 10 million
+                            "max_tokens": 5000,  # Limited to 5k tokens
                             "tools": tools,
                             "tool_choice": "auto",
                             "top_p": 0.9
