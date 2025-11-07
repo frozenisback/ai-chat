@@ -6,6 +6,7 @@ import time
 import uuid
 import logging
 from logging.handlers import RotatingFileHandler
+import os
 
 # ================== LOGGING CONFIG ==================
 # Set up logging
@@ -19,10 +20,9 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# ================== AI CONFIG ==================
-INFERENCE_KEY = "inf-c33d423b-0b4b-470d-990c-1ad774a222ba"
-INFERENCE_URL = "https://us.inference.heroku.com/v1/chat/completions"
-MODEL = "claude-4-5-sonnet"
+INFERENCE_KEY = os.getenv("INFERENCE_KEY")
+INFERENCE_BASE_URL = os.getenv("INFERENCE_URL", "https://us.inference.heroku.com")
+MODEL = os.getenv("INFERENCE_MODEL_ID", "claude-4-5-sonnet")
 
 headers = {
     "Authorization": f"Bearer {INFERENCE_KEY}",
