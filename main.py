@@ -20,9 +20,20 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+
 INFERENCE_KEY = os.getenv("INFERENCE_KEY")
 INFERENCE_BASE_URL = os.getenv("INFERENCE_URL", "https://us.inference.heroku.com")
 MODEL = os.getenv("INFERENCE_MODEL_ID", "claude-4-5-sonnet")
+
+# Ensure correct endpoint formatting
+if INFERENCE_BASE_URL.endswith("/"):
+    INFERENCE_URL = f"{INFERENCE_BASE_URL}v1/chat/completions"
+else:
+    INFERENCE_URL = f"{INFERENCE_BASE_URL}/v1/chat/completions"
+
+# Validate env vars
+if not INFERENCE_KEY:
+    raise ValueError("INFERENCE_KEY environment variable not set")
 
 headers = {
     "Authorization": f"Bearer {INFERENCE_KEY}",
@@ -32,6 +43,7 @@ headers = {
 
 # Store conversations in memory (in production, use a database)
 conversations = {}
+
 
 # ================== TOOLS CONFIG ==================
 # Define available tools/functions
