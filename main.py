@@ -1561,15 +1561,30 @@ def chat():
             conversations[session_id] = [
                 {"role": "system", "content": """You are a helpful AI assistant with access to tools. When using tools, follow these guidelines:
 
-1. Always provide ALL required parameters for tool calls.
-2. If a tool call fails, analyze the error message and try again with correct parameters.
-3. Format tool calls as follows:
-   - For get_weather: {"name": "get_weather", "parameters": {"city": "City Name"}}
-   - For calculate: {"name": "calculate", "parameters": {"expression": "2+2"}}
-   - For search_web: {"name": "search_web", "parameters": {"query": "search terms"}}
+1. ALWAYS provide ALL required parameters for tool calls.
+2. Tool calls must be in the following format:
+   {
+     "name": "tool_name",
+     "parameters": {
+       "param1": "value1",
+       "param2": "value2"
+     }
+   }
 
-4. If you make an error in a tool call, acknowledge it and provide the correct format.
-5. Always explain what you're doing when using a tool."""}
+3. For the get_weather tool, you MUST provide:
+   - name: "get_weather"
+   - parameters: {"city": "City Name"} (city is required)
+
+4. For the calculate tool, you MUST provide:
+   - name: "calculate"
+   - parameters: {"expression": "math expression"} (expression is required)
+
+5. For the search_web tool, you MUST provide:
+   - name: "search_web"
+   - parameters: {"query": "search terms"} (query is required)
+
+6. If a tool call fails, analyze the error message and try again with correct parameters.
+7. Always explain what you're doing when using a tool."""}
             ]
             logger.info(f"Created new conversation for session {session_id}")
         
@@ -1683,6 +1698,7 @@ def chat():
                                 if "example" in tool_result:
                                     error_message += f"Example of correct usage: {json.dumps(tool_result['example'])}"
                                 
+                                # Add a message to the conversation with the error and example
                                 conversation.append({
                                     "role": "assistant",
                                     "content": None,
@@ -1693,6 +1709,12 @@ def chat():
                                     "tool_call_id": tool_call["id"],
                                     "name": tool_name,
                                     "content": error_message
+                                })
+                                
+                                # Add a user message with instructions on how to fix the error
+                                conversation.append({
+                                    "role": "user",
+                                    "content": f"You made an error in your tool call. {error_message}. Please try again with the correct parameters."
                                 })
                                 
                                 # Yield the error message to the user
@@ -1779,15 +1801,30 @@ def clear_chat():
             conversations[session_id] = [
                 {"role": "system", "content": """You are a helpful AI assistant with access to tools. When using tools, follow these guidelines:
 
-1. Always provide ALL required parameters for tool calls.
-2. If a tool call fails, analyze the error message and try again with correct parameters.
-3. Format tool calls as follows:
-   - For get_weather: {"name": "get_weather", "parameters": {"city": "City Name"}}
-   - For calculate: {"name": "calculate", "parameters": {"expression": "2+2"}}
-   - For search_web: {"name": "search_web", "parameters": {"query": "search terms"}}
+1. ALWAYS provide ALL required parameters for tool calls.
+2. Tool calls must be in the following format:
+   {
+     "name": "tool_name",
+     "parameters": {
+       "param1": "value1",
+       "param2": "value2"
+     }
+   }
 
-4. If you make an error in a tool call, acknowledge it and provide the correct format.
-5. Always explain what you're doing when using a tool."""}
+3. For the get_weather tool, you MUST provide:
+   - name: "get_weather"
+   - parameters: {"city": "City Name"} (city is required)
+
+4. For the calculate tool, you MUST provide:
+   - name: "calculate"
+   - parameters: {"expression": "math expression"} (expression is required)
+
+5. For the search_web tool, you MUST provide:
+   - name: "search_web"
+   - parameters: {"query": "search terms"} (query is required)
+
+6. If a tool call fails, analyze the error message and try again with correct parameters.
+7. Always explain what you're doing when using a tool."""}
             ]
             logger.info(f"Reset conversation for session {session_id}")
         
