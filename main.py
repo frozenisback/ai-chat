@@ -43,6 +43,8 @@ headers = {
 
 # Store conversations in memory (in production, use a database)
 conversations = {}
+# Store session metadata
+session_metadata = {}
 
 
 # ================== TOOLS CONFIG ==================
@@ -620,6 +622,158 @@ HTML_PAGE = """
             100% { transform: rotate(360deg); }
         }
 
+        .session-modal {
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background: rgba(15, 23, 42, 0.8);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            z-index: 1000;
+            opacity: 0;
+            visibility: hidden;
+            transition: opacity 0.3s ease, visibility 0.3s ease;
+        }
+
+        .session-modal.active {
+            opacity: 1;
+            visibility: visible;
+        }
+
+        .session-modal-content {
+            background: var(--bg-secondary);
+            border-radius: 0.5rem;
+            width: 90%;
+            max-width: 600px;
+            max-height: 80vh;
+            overflow-y: auto;
+            box-shadow: var(--shadow-lg);
+            border: 1px solid var(--border-color);
+        }
+
+        .session-modal-header {
+            padding: 1rem 1.5rem;
+            border-bottom: 1px solid var(--border-color);
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+        }
+
+        .session-modal-title {
+            font-size: 1.25rem;
+            font-weight: 600;
+        }
+
+        .session-modal-close {
+            background: none;
+            border: none;
+            color: var(--text-secondary);
+            font-size: 1.5rem;
+            cursor: pointer;
+            transition: color 0.2s ease;
+        }
+
+        .session-modal-close:hover {
+            color: var(--text-color);
+        }
+
+        .session-modal-body {
+            padding: 1.5rem;
+        }
+
+        .session-list {
+            display: flex;
+            flex-direction: column;
+            gap: 0.75rem;
+        }
+
+        .session-item {
+            background: var(--bg-tertiary);
+            border-radius: 0.5rem;
+            padding: 1rem;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            transition: background 0.2s ease;
+        }
+
+        .session-item:hover {
+            background: rgba(99, 102, 241, 0.1);
+        }
+
+        .session-item.active {
+            background: rgba(99, 102, 241, 0.2);
+            border: 1px solid var(--primary-color);
+        }
+
+        .session-info {
+            display: flex;
+            flex-direction: column;
+            gap: 0.25rem;
+        }
+
+        .session-name {
+            font-weight: 500;
+        }
+
+        .session-date {
+            font-size: 0.875rem;
+            color: var(--text-secondary);
+        }
+
+        .session-actions {
+            display: flex;
+            gap: 0.5rem;
+        }
+
+        .session-action-btn {
+            background: rgba(255, 255, 255, 0.1);
+            border: none;
+            color: var(--text-secondary);
+            width: 36px;
+            height: 36px;
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            cursor: pointer;
+            transition: all 0.2s ease;
+        }
+
+        .session-action-btn:hover {
+            background: rgba(255, 255, 255, 0.2);
+            color: var(--text-color);
+        }
+
+        .session-action-btn.delete:hover {
+            background: rgba(239, 68, 68, 0.2);
+            color: #f87171;
+        }
+
+        .new-session-btn {
+            background: var(--primary-color);
+            border: none;
+            color: white;
+            border-radius: 0.5rem;
+            padding: 0.75rem 1.5rem;
+            font-weight: 500;
+            cursor: pointer;
+            transition: background 0.2s ease;
+            margin-bottom: 1rem;
+            width: 100%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 0.5rem;
+        }
+
+        .new-session-btn:hover {
+            background: var(--primary-dark);
+        }
+
         /* Scrollbar styling */
         .chat-messages::-webkit-scrollbar {
             width: 6px;
@@ -698,6 +852,9 @@ HTML_PAGE = """
                 <h1>Claude 4.5 Assistant</h1>
             </div>
             <div class="header-actions">
+                <button id="sessions-btn" title="Sessions">
+                    <i class="fas fa-history"></i>
+                </button>
                 <button id="clear-chat" title="Clear Chat">
                     <i class="fas fa-trash"></i>
                 </button>
@@ -734,9 +891,29 @@ HTML_PAGE = """
         <div class="loading-spinner"></div>
     </div>
 
+    <div class="session-modal" id="session-modal">
+        <div class="session-modal-content">
+            <div class="session-modal-header">
+                <h2 class="session-modal-title">Chat Sessions</h2>
+                <button class="session-modal-close" id="session-modal-close">
+                    <i class="fas fa-times"></i>
+                </button>
+            </div>
+            <div class="session-modal-body">
+                <button class="new-session-btn" id="new-session-btn">
+                    <i class="fas fa-plus"></i>
+                    New Chat Session
+                </button>
+                <div class="session-list" id="session-list">
+                    <!-- Sessions will be populated here -->
+                </div>
+            </div>
+        </div>
+    </div>
+
     <script>
         // Generate a unique session ID for this user
-        const sessionId = localStorage.getItem('chatSessionId') || generateSessionId();
+        let sessionId = localStorage.getItem('chatSessionId') || generateSessionId();
         localStorage.setItem('chatSessionId', sessionId);
 
         function generateSessionId() {
@@ -766,7 +943,12 @@ HTML_PAGE = """
         const clearChatBtn = document.getElementById('clear-chat');
         const attachBtn = document.getElementById('attach-btn');
         const settingsBtn = document.getElementById('settings-btn');
+        const sessionsBtn = document.getElementById('sessions-btn');
         const loadingOverlay = document.getElementById('loading-overlay');
+        const sessionModal = document.getElementById('session-modal');
+        const sessionModalClose = document.getElementById('session-modal-close');
+        const newSessionBtn = document.getElementById('new-session-btn');
+        const sessionList = document.getElementById('session-list');
 
         // Remove welcome message when first message is sent
         let welcomeMessageRemoved = false;
@@ -784,6 +966,16 @@ HTML_PAGE = """
         });
         settingsBtn.addEventListener('click', () => {
             showNotification('Settings panel coming soon!');
+        });
+        sessionsBtn.addEventListener('click', showSessionModal);
+        sessionModalClose.addEventListener('click', hideSessionModal);
+        newSessionBtn.addEventListener('click', createNewSession);
+
+        // Close modal when clicking outside
+        sessionModal.addEventListener('click', (e) => {
+            if (e.target === sessionModal) {
+                hideSessionModal();
+            }
         });
 
         // Send message function
@@ -1131,6 +1323,149 @@ HTML_PAGE = """
             }
         }
 
+        // Session management functions
+        function showSessionModal() {
+            loadSessions();
+            sessionModal.classList.add('active');
+        }
+
+        function hideSessionModal() {
+            sessionModal.classList.remove('active');
+        }
+
+        function loadSessions() {
+            // Get all session IDs from localStorage
+            const sessionKeys = Object.keys(localStorage).filter(key => key.startsWith('chatSessionId_'));
+            
+            // Clear current session list
+            sessionList.innerHTML = '';
+            
+            // Add current session
+            const currentSessionItem = createSessionItem(sessionId, true);
+            sessionList.appendChild(currentSessionItem);
+            
+            // Add other sessions
+            sessionKeys.forEach(key => {
+                const otherSessionId = key.replace('chatSessionId_', '');
+                if (otherSessionId !== sessionId) {
+                    const sessionItem = createSessionItem(otherSessionId, false);
+                    sessionList.appendChild(sessionItem);
+                }
+            });
+        }
+
+        function createSessionItem(sessionId, isActive) {
+            const sessionItem = document.createElement('div');
+            sessionItem.className = `session-item ${isActive ? 'active' : ''}`;
+            
+            const sessionInfo = document.createElement('div');
+            sessionInfo.className = 'session-info';
+            
+            const sessionName = document.createElement('div');
+            sessionName.className = 'session-name';
+            sessionName.textContent = isActive ? 'Current Session' : `Session ${sessionId.substring(8, 16)}`;
+            
+            const sessionDate = document.createElement('div');
+            sessionDate.className = 'session-date';
+            sessionDate.textContent = new Date().toLocaleDateString();
+            
+            sessionInfo.appendChild(sessionName);
+            sessionInfo.appendChild(sessionDate);
+            
+            const sessionActions = document.createElement('div');
+            sessionActions.className = 'session-actions';
+            
+            if (!isActive) {
+                const switchBtn = document.createElement('button');
+                switchBtn.className = 'session-action-btn';
+                switchBtn.innerHTML = '<i class="fas fa-exchange-alt"></i>';
+                switchBtn.title = 'Switch to this session';
+                switchBtn.addEventListener('click', () => switchToSession(sessionId));
+                
+                const deleteBtn = document.createElement('button');
+                deleteBtn.className = 'session-action-btn delete';
+                deleteBtn.innerHTML = '<i class="fas fa-trash"></i>';
+                deleteBtn.title = 'Delete this session';
+                deleteBtn.addEventListener('click', () => deleteSession(sessionId));
+                
+                sessionActions.appendChild(switchBtn);
+                sessionActions.appendChild(deleteBtn);
+            }
+            
+            sessionItem.appendChild(sessionInfo);
+            sessionItem.appendChild(sessionActions);
+            
+            return sessionItem;
+        }
+
+        function createNewSession() {
+            // Save current session ID
+            localStorage.setItem(`chatSessionId_${sessionId}`, 'true');
+            
+            // Generate new session ID
+            sessionId = generateSessionId();
+            localStorage.setItem('chatSessionId', sessionId);
+            
+            // Clear chat UI
+            chatMessages.innerHTML = `
+                <div class="welcome-message">
+                    <i class="fas fa-comments"></i>
+                    <h2>Welcome to Claude 4.5 Assistant</h2>
+                    <p>I'm here to help you with any questions or tasks you have. Just type your message below and press send.</p>
+                </div>
+            `;
+            welcomeMessageRemoved = false;
+            
+            // Close modal
+            hideSessionModal();
+            
+            // Show notification
+            showNotification('New session created');
+        }
+
+        function switchToSession(newSessionId) {
+            // Save current session ID
+            localStorage.setItem(`chatSessionId_${sessionId}`, 'true');
+            
+            // Switch to new session
+            sessionId = newSessionId;
+            localStorage.setItem('chatSessionId', sessionId);
+            
+            // Clear chat UI
+            chatMessages.innerHTML = `
+                <div class="welcome-message">
+                    <i class="fas fa-comments"></i>
+                    <h2>Welcome to Claude 4.5 Assistant</h2>
+                    <p>I'm here to help you with any questions or tasks you have. Just type your message below and press send.</p>
+                </div>
+            `;
+            welcomeMessageRemoved = false;
+            
+            // Close modal
+            hideSessionModal();
+            
+            // Show notification
+            showNotification('Switched to session');
+        }
+
+        function deleteSession(sessionIdToDelete) {
+            if (confirm('Are you sure you want to delete this session?')) {
+                // Remove from localStorage
+                localStorage.removeItem(`chatSessionId_${sessionIdToDelete}`);
+                
+                // If it's the current session, create a new one
+                if (sessionIdToDelete === sessionId) {
+                    createNewSession();
+                } else {
+                    // Refresh the session list
+                    loadSessions();
+                }
+                
+                // Show notification
+                showNotification('Session deleted');
+            }
+        }
+
         // Show notification
         function showNotification(message) {
             const notification = document.createElement('div');
@@ -1351,7 +1686,9 @@ def chat():
                                     pass
                     
                     # Save the complete response to conversation
-                    conversation.append({"role": "assistant", "content": full_reply})
+                    # Only add content if there's actual content, not just tool calls
+                    if full_reply:
+                        conversation.append({"role": "assistant", "content": full_reply})
                     logger.info(f"Saved response to conversation for session {session_id}")
             except requests.exceptions.Timeout:
                 logger.error(f"Request timeout for session {session_id}")
