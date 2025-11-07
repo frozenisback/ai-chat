@@ -3,3 +3,4 @@ requests
 python-dotenv
 sseclient-py
 waitress
+tiktoken
